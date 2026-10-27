@@ -1,6 +1,5 @@
 {
   "version": 1,
-  "repoRoot": "/home/sandbox/ember",
   "embedderKind": "local-hashing-lexical",
   "dim": 1024,
   "chunkCount": 486,
