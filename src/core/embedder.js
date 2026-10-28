@@ -7,10 +7,11 @@
  * works well for code (identifiers are meaningful) but it will not paraphrase.
  *
  * Optional: HttpEmbedder - any OpenAI-compatible /embeddings endpoint
- * (OpenRouter, Alan-provided open-model gateway, Ollama, ...). Configure with
+ * (OpenRouter, Ollama, or any other compatible gateway). Configure with
  * EMBER_API_BASE / EMBER_API_KEY / EMBER_EMBED_MODEL.
  */
 import { normalize } from "./hnsw.js";
+import { LlmClient, llmConfigFromEnv } from "./llm.js";
 /** Very light stemmer: strip common English suffixes so "skipped" matches
  * "skip" and "indexing" matches "index". Not a linguistic stemmer - just
  * enough to bridge natural-language queries and code identifiers. */
@@ -69,57 +70,37 @@ export class HashingEmbedder {
     }
 }
 export class HttpEmbedder {
-    base;
-    apiKey;
     model;
     kind = "http-openai-compatible";
     dim;
-    constructor(base, apiKey, model, dim) {
-        this.base = base;
-        this.apiKey = apiKey;
+    client;
+    constructor(clientOrBase, apiKey, model, dim) {
         this.model = model;
         this.dim = dim;
+        this.client = typeof clientOrBase === "string"
+            ? new LlmClient({ base: clientOrBase, apiKey: apiKey ?? "", embedModel: model, embedDim: dim })
+            : clientOrBase;
     }
     async embed(texts) {
-        let res;
-        try {
-            res = await fetch(`${this.base.replace(/\/$/, "")}/embeddings`, {
-                method: "POST",
-                headers: {
-                    "content-type": "application/json",
-                    authorization: `Bearer ${this.apiKey}`,
-                },
-                body: JSON.stringify({ model: this.model, input: texts }),
-                signal: AbortSignal.timeout(60_000),
-            });
-        }
-        catch (e) {
-            throw new Error(`embeddings endpoint unreachable (${this.base}): ${e instanceof Error ? e.message : String(e)}`);
-        }
-        if (!res.ok)
-            throw new Error(`embeddings endpoint ${res.status}: ${await res.text()}`);
-        const data = await res.json();
-        return data.data.map((d, i) => {
+        const raw = await this.client.embedRaw(texts);
+        return raw.map((embedding, i) => {
             // A model returning a different width than configured would otherwise
             // silently corrupt the vector store; fail honestly instead.
-            if (d.embedding.length !== this.dim) {
-                throw new Error(`embeddings model ${this.model} returned dim=${d.embedding.length} but EMBER_EMBED_DIM=${this.dim} (batch item ${i}). Fix EMBER_EMBED_DIM or choose a ${this.dim}-dim model, then re-run: ember index --full`);
+            if (embedding.length !== this.dim) {
+                throw new Error(`embeddings model ${this.model} returned dim=${embedding.length} but EMBER_EMBED_DIM=${this.dim} (batch item ${i}). Fix EMBER_EMBED_DIM or choose a ${this.dim}-dim model, then re-run: ember index --full`);
             }
-            return normalize(Float32Array.from(d.embedding));
+            return normalize(Float32Array.from(embedding));
         });
     }
 }
 /** Pick an embedder from the environment; defaults to the offline lexical one.
- * Environment-agnostic: outside Node (e.g. the browser demo bundle) there is
- * no process.env, so it always falls back to the offline lexical embedder. */
-export function embedderFromEnv() {
-    const env = typeof process !== "undefined" ? process.env : {};
-    const base = env.EMBER_API_BASE;
-    const key = env.EMBER_API_KEY;
-    const model = env.EMBER_EMBED_MODEL;
-    if (base && key && model) {
-        const dim = parseInt(env.EMBER_EMBED_DIM ?? "1536", 10);
-        return new HttpEmbedder(base, key, model, dim);
+ * Outside Node (e.g. the browser demo bundle) there is no process.env, so it
+ * always falls back to the offline lexical embedder. */
+export function embedderFromEnv(env = typeof process !== "undefined" ? process.env : {}, usage) {
+    const cfg = llmConfigFromEnv(env);
+    if (cfg?.embedModel) {
+        const dim = cfg.embedDim ?? 1536;
+        return new HttpEmbedder(new LlmClient(cfg, usage), undefined, cfg.embedModel, dim);
     }
     return new HashingEmbedder();
 }
