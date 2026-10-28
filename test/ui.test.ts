@@ -1,0 +1,111 @@
+/** ember ui: full workflow over the real engine + local-server security. */
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
+import type { AddressInfo } from "node:net";
+import { createUiServer } from "../src/ui/server.js";
+import { HashingEmbedder } from "../src/core/embedder.js";
+import { indexRepo } from "../src/core/indexer.js";
+
+const ALPHA = "export function alphaSearch(input: string): string {\n  return input.trim();\n}\n";
+const BETA = "export function betaHelper(n: number): number {\n  return n * 2;\n}\n";
+
+async function setup(): Promise<{ base: string; dir: string; close: () => Promise<void> }> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-ui-"));
+  await fs.writeFile(path.join(dir, "alpha.ts"), ALPHA);
+  await fs.writeFile(path.join(dir, "beta.ts"), BETA);
+  await fs.writeFile(path.join(dir, ".emberignore"), "ignored.ts\n");
+  await fs.writeFile(path.join(dir, "ignored.ts"), "export function ignoredSecret(): string {\n  return 'xyzzy-fixture';\n}\n");
+  await indexRepo(dir, new HashingEmbedder());
+  const server = createUiServer(dir);
+  await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as AddressInfo;
+  return { base: `http://127.0.0.1:${port}`, dir, close: () => new Promise(r => server.close(() => r())) };
+}
+
+test("ui workflow: status -> search with real excerpts -> expand context -> ask -> map -> note save and read-back across restart", async () => {
+  const { base, dir, close } = await setup();
+  try {
+    const status = await (await fetch(`${base}/api/status`)).json() as any;
+    assert.equal(status.indexed, true);
+    assert.equal(status.hybrid, false);
+
+    // .emberignore keeps the fixture out of the corpus entirely.
+    const ignored = await (await fetch(`${base}/api/search?q=xyzzy-fixture`)).json() as any;
+    assert.ok(!ignored.hits.some((h: any) => h.file === "ignored.ts"), "ignored file never surfaces");
+
+    // Search returns chunks whose text matches the actual file lines.
+    const search = await (await fetch(`${base}/api/search?q=trim%20input`)).json() as any;
+    const hit = search.hits.find((h: any) => h.file === "alpha.ts");
+    assert.ok(hit, "alpha.ts found");
+    const fileLines = ALPHA.split("\n");
+    const chunkLines = hit.text.split("\n");
+    for (let i = 0; i < chunkLines.length; i++) {
+      assert.equal(chunkLines[i], fileLines[hit.startLine - 1 + i], `excerpt line ${hit.startLine + i} matches the file`);
+    }
+
+    // Expand: surrounding context arrives with correct line numbers.
+    const ctx = await (await fetch(`${base}/api/file?path=alpha.ts&start=1&end=3`)).json() as any;
+    assert.deepEqual(ctx.lines, fileLines.slice(0, 3));
+
+    // Ask without a chat model: honestly labeled retrieval-only, hits attached.
+    const ask = await (await fetch(`${base}/api/ask?q=what%20does%20alphaSearch%20do`)).json() as any;
+    assert.equal(ask.synthesized, false);
+    assert.ok(ask.answer.includes("Retrieval only"), "labeled as retrieval, not an answer");
+    assert.ok(ask.hits.length >= 1 && ask.hits[0].text.length > 0);
+
+    // Repo map renders.
+    const map = await (await fetch(`${base}/api/map`)).json() as any;
+    assert.ok(map.map.includes("alpha.ts") || map.map.length > 0);
+
+    // Note save -> read back -> survives a server restart (persists on disk).
+    await (await fetch(`${base}/api/notes`, { method: "POST", body: JSON.stringify({ text: "ui workflow note", tags: ["ui"] }) })).json();
+    await close();
+    const server2 = createUiServer(dir);
+    await new Promise<void>(r => server2.listen(0, "127.0.0.1", r));
+    const base2 = `http://127.0.0.1:${(server2.address() as AddressInfo).port}`;
+    const notes = await (await fetch(`${base2}/api/notes`)).json() as any;
+    assert.equal(notes.notes[0].text, "ui workflow note", "note persisted across restart");
+    await new Promise(r => server2.close(() => r(null)));
+    return;
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("ui security: path escapes, symlink escape, and cross-origin mutations are refused", async () => {
+  const { base, dir, close } = await setup();
+  try {
+    // Traversal and absolute paths.
+    assert.equal((await fetch(`${base}/api/file?path=${encodeURIComponent("../package.json")}`)).status, 403);
+    assert.equal((await fetch(`${base}/api/file?path=${encodeURIComponent("/etc/passwd")}`)).status, 403);
+
+    // A symlink inside the repo pointing outside must not leak the target.
+    await fs.symlink("/etc/passwd", path.join(dir, "leak.ts"));
+    const leak = await fetch(`${base}/api/file?path=leak.ts`);
+    assert.equal(leak.status, 403, "symlink escape refused");
+
+    // Cross-origin POST (browser CSRF shape) refused; same-origin allowed.
+    const bad = await fetch(`${base}/api/notes`, {
+      method: "POST",
+      headers: { origin: "https://evil.example" },
+      body: JSON.stringify({ text: "csrf attempt" }),
+    });
+    assert.equal(bad.status, 403);
+    const good = await fetch(`${base}/api/notes`, {
+      method: "POST",
+      headers: { origin: `http://127.0.0.1:${(new URL(base)).port}` },
+      body: JSON.stringify({ text: "same-origin ok" }),
+    });
+    assert.equal(good.status, 200);
+    const notes = await (await fetch(`${base}/api/notes`)).json() as any;
+    assert.ok(!notes.notes.some((n: any) => n.text === "csrf attempt"), "forged note never written");
+    assert.ok(notes.notes.some((n: any) => n.text === "same-origin ok"));
+  } finally {
+    await close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

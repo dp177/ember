@@ -1,0 +1,31 @@
+{
+  "name": "ember-mcp",
+  "version": "0.3.0",
+  "description": "Ember - a warm start for coding agents. Local-first, persistent codebase memory over MCP.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "ember": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && tsc -p tsconfig.test.json && node --test \"dist-test/test/**/*.test.js\"",
+    "ember": "node dist/cli.js",
+    "build:demo": "tsc -p tsconfig.demo.json && node scripts/build-demo.mjs",
+    "e2e:ui": "node scripts/e2e-ui.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "commander": "^12.1.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "typescript": "^5.6.2",
+    "puppeteer-core": "^25.16.0"
+  }
+}

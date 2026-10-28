@@ -1,0 +1,240 @@
+/** OpenAI-compatible provider client (chat + embeddings) with honest
+ * failure semantics, usage accounting and process-level request guards.
+ *
+ * What the guards ARE: EMBER_MAX_CALLS caps provider requests per process
+ * and EMBER_MAX_PROMPT_CHARS caps input size per call. Both actually block
+ * the request they name.
+ * What they are NOT: billing limits. Ember never sees provider billing;
+ * real spend is only on the provider's dashboard. Usage records say
+ * "estimated" whenever a token figure is a chars/4 approximation rather
+ * than provider-reported usage. */
+
+// Node builtins are imported lazily inside the methods that need them, so
+// this module stays loadable in non-Node bundles (the browser demo imports
+// embedder.ts, which imports this file) as long as no Node-only path runs.
+
+export interface LlmConfig {
+  /** Base URL of an OpenAI-compatible API, e.g. https://openrouter.ai/api/v1 */
+  base: string;
+  apiKey: string;
+  embedModel?: string;
+  embedDim?: number;
+  chatModel?: string;
+  /** Max provider requests this process may make (EMBER_MAX_CALLS). */
+  maxCalls?: number;
+  /** Max input characters per request (EMBER_MAX_PROMPT_CHARS). */
+  maxPromptCharsPerCall?: number;
+}
+
+export interface UsageRecord {
+  ts: string;
+  kind: "embed" | "chat";
+  model: string;
+  /** Host of the configured base URL - where the request went. */
+  provider: string;
+  items: number;
+  /** Provider-reported token counts, when the API returned a usage object. */
+  inputTokens?: number;
+  outputTokens?: number;
+  /** chars/4 approximation, present only when the provider reported nothing. */
+  estimatedInputTokens?: number;
+  /** true when any token figure above is an estimate, not provider-reported. */
+  estimated: boolean;
+  ok: boolean;
+  error?: string;
+}
+
+export interface UsageLogger { log(r: UsageRecord): Promise<void>; }
+
+export class NullUsageLogger implements UsageLogger { async log(): Promise<void> {} }
+
+/** Appends one JSON record per provider call to .ember/usage.jsonl. */
+export class JsonlUsageLogger implements UsageLogger {
+  constructor(readonly file: string) {}
+  static forRepo(repoRoot: string): JsonlUsageLogger {
+    return new JsonlUsageLogger(`${repoRoot}/.ember/usage.jsonl`);
+  }
+  async log(r: UsageRecord): Promise<void> {
+    // Resolved through Function so non-Node builds (browser demo bundle, no
+    // @types/node) never have to resolve the specifier at compile time; in
+    // the browser this code path simply never runs.
+    const fs: any = await (new Function('return import("node:fs/promises")')());
+    const dir = this.file.slice(0, this.file.lastIndexOf("/"));
+    await fs.mkdir(dir, { recursive: true });
+    await fs.appendFile(this.file, JSON.stringify(r) + "\n");
+  }
+}
+
+export interface ChatMessage { role: "system" | "user" | "assistant"; content: string; }
+export interface ChatResult {
+  content: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  providerReported: boolean;
+}
+
+const RETRYABLE = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
+const TIMEOUT_MS = 60_000;
+
+export class LlmClient {
+  private calls = 0;
+  /** Provider requests are serialized through this chain: one in flight per
+   * client, so concurrency 1 is enforced, not just customary. */
+  private queue: Promise<unknown> = Promise.resolve();
+  constructor(
+    readonly cfg: LlmConfig,
+    private usage: UsageLogger = new NullUsageLogger(),
+    private fetchFn: typeof fetch = fetch,
+  ) {}
+
+  private providerHost(): string {
+    try { return new URL(this.cfg.base).host; } catch { return this.cfg.base; }
+  }
+
+  /** Guards that genuinely block the named request. Not billing limits. */
+  private guard(inputChars: number): void {
+    if (this.cfg.maxCalls !== undefined && this.calls >= this.cfg.maxCalls) {
+      throw new Error(
+        `request blocked: EMBER_MAX_CALLS=${this.cfg.maxCalls} reached. This guard caps provider requests per process (it does not track or limit spending - check the provider dashboard for real billing). Raise or unset it to continue.`
+      );
+    }
+    if (this.cfg.maxPromptCharsPerCall !== undefined && inputChars > this.cfg.maxPromptCharsPerCall) {
+      throw new Error(
+        `request blocked: input is ${inputChars} chars, over EMBER_MAX_PROMPT_CHARS=${this.cfg.maxPromptCharsPerCall}. Narrow the query or raise the cap.`
+      );
+    }
+  }
+
+  private post(urlPath: string, body: unknown): Promise<Response> {
+    const run = this.queue.then(() => this.postImmediate(urlPath, body));
+    this.queue = run.catch(() => {});
+    return run;
+  }
+
+  private async postImmediate(urlPath: string, body: unknown): Promise<Response> {
+    const url = `${this.cfg.base.replace(/\/$/, "")}${urlPath}`;
+    let lastErr: Error | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      this.calls++;
+      let res: Response;
+      try {
+        res = await this.fetchFn(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${this.cfg.apiKey}`,
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+      } catch (e) {
+        lastErr = new Error(`endpoint unreachable (${this.providerHost()}): ${e instanceof Error ? e.message : String(e)}`);
+        if (attempt === 0) { await new Promise(r => setTimeout(r, 1000)); continue; }
+        throw lastErr;
+      }
+      if (res.ok) return res;
+      const text = await res.text().catch(() => "");
+      lastErr = new Error(`endpoint ${res.status}: ${text.slice(0, 500)}`);
+      if (RETRYABLE.has(res.status) && attempt === 0) { await new Promise(r => setTimeout(r, 1000)); continue; }
+      throw lastErr;
+    }
+    throw lastErr ?? new Error("request failed");
+  }
+
+  async chat(messages: ChatMessage[], opts: { maxTokens?: number; temperature?: number } = {}): Promise<ChatResult> {
+    if (!this.cfg.chatModel) throw new Error("no chat model configured (EMBER_CHAT_MODEL)");
+    const inputChars = messages.reduce((n, m) => n + m.content.length, 0);
+    this.guard(inputChars);
+    const model = this.cfg.chatModel;
+    const rec: UsageRecord = {
+      ts: new Date().toISOString(), kind: "chat", model,
+      provider: this.providerHost(), items: messages.length,
+      estimated: false, ok: false,
+    };
+    try {
+      const res = await this.post("/chat/completions", {
+        model,
+        temperature: opts.temperature ?? 0.2,
+        ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
+        messages,
+      });
+      const data = await res.json() as {
+        choices: { message: { content: string } }[];
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      };
+      const content = data.choices[0]?.message?.content ?? "";
+      if (!content.trim()) throw new Error("chat endpoint returned an empty answer");
+      rec.ok = true;
+      if (data.usage?.prompt_tokens !== undefined) {
+        rec.inputTokens = data.usage.prompt_tokens;
+        rec.outputTokens = data.usage.completion_tokens;
+        rec.estimated = false;
+      } else {
+        rec.estimatedInputTokens = Math.ceil(inputChars / 4);
+        rec.estimated = true;
+      }
+      return { content, inputTokens: rec.inputTokens, outputTokens: rec.outputTokens, providerReported: !rec.estimated };
+    } catch (e) {
+      rec.error = e instanceof Error ? e.message : String(e);
+      throw e;
+    } finally {
+      await this.usage.log(rec).catch(() => {});
+    }
+  }
+
+  /** Raw embeddings call; dimension validation stays with the caller. */
+  async embedRaw(texts: string[]): Promise<number[][]> {
+    if (!this.cfg.embedModel) throw new Error("no embedding model configured (EMBER_EMBED_MODEL)");
+    const inputChars = texts.reduce((n, t) => n + t.length, 0);
+    this.guard(inputChars);
+    const model = this.cfg.embedModel;
+    const rec: UsageRecord = {
+      ts: new Date().toISOString(), kind: "embed", model,
+      provider: this.providerHost(), items: texts.length,
+      estimated: false, ok: false,
+    };
+    try {
+      const res = await this.post("/embeddings", { model, input: texts });
+      const data = await res.json() as {
+        data: { embedding: number[] }[];
+        usage?: { prompt_tokens?: number; total_tokens?: number };
+      };
+      rec.ok = true;
+      const reported = data.usage?.prompt_tokens ?? data.usage?.total_tokens;
+      if (reported !== undefined) { rec.inputTokens = reported; rec.estimated = false; }
+      else { rec.estimatedInputTokens = Math.ceil(inputChars / 4); rec.estimated = true; }
+      return data.data.map(d => d.embedding);
+    } catch (e) {
+      rec.error = e instanceof Error ? e.message : String(e);
+      throw e;
+    } finally {
+      await this.usage.log(rec).catch(() => {});
+    }
+  }
+}
+
+function parseOptInt(v: string | undefined): number | undefined {
+  if (v === undefined || v.trim() === "") return undefined;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** Build provider config from the environment, or null when unconfigured
+ * (offline mode). EMBER_API_BASE is the single base URL; EMBER_CHAT_BASE is
+ * still honored for backward compatibility. */
+export function llmConfigFromEnv(
+  env: Record<string, string | undefined> = typeof process !== "undefined" ? process.env : {},
+): LlmConfig | null {
+  const base = env.EMBER_API_BASE ?? env.EMBER_CHAT_BASE;
+  const apiKey = env.EMBER_API_KEY;
+  if (!base || !apiKey) return null;
+  const embedDim = parseOptInt(env.EMBER_EMBED_DIM);
+  return {
+    base, apiKey,
+    embedModel: env.EMBER_EMBED_MODEL || undefined,
+    embedDim: embedDim,
+    chatModel: env.EMBER_CHAT_MODEL || undefined,
+    maxCalls: parseOptInt(env.EMBER_MAX_CALLS),
+    maxPromptCharsPerCall: parseOptInt(env.EMBER_MAX_PROMPT_CHARS),
+  };
+}

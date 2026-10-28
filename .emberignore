@@ -1,0 +1,3 @@
+# Keep benchmark fixtures out of the indexed corpus so eval questions
+# cannot answer themselves (self-answering artifact, not retrieval quality).
+eval/questions.json

@@ -1,0 +1,11 @@
+export { HnswIndex, bruteForceTopK, normalize } from "./core/hnsw.js";
+export { HashingEmbedder, HttpEmbedder, embedderFromEnv, tokenize } from "./core/embedder.js";
+export { chunkFile, type CodeChunk } from "./core/chunker.js";
+export { scanRepo, type ScannedFile } from "./core/scanner.js";
+export { EmberStore, type ChunkRecord, type IndexMeta } from "./core/store.js";
+export { indexRepo } from "./core/indexer.js";
+export { EmberEngine, type SearchHit } from "./core/engine.js";
+export { buildRepoMap, formatRepoMap } from "./core/repomap.js";
+export { getCommits, getDecisions } from "./core/decisions.js";
+export { answerQuestion } from "./core/ask.js";
+export { startMcpServer } from "./mcp/server.js";

@@ -1,0 +1,107 @@
+[
+  {
+    "q": "which heuristic picks graph neighbors when a node is inserted?",
+    "expect": [
+      "src/core/hnsw.ts"
+    ],
+    "pq": "what strategy chooses the links of a freshly added element in the graph"
+  },
+  {
+    "q": "which directories and files get excluded from indexing?",
+    "expect": [
+      "src/core/scanner.ts"
+    ],
+    "pq": "what gets skipped during a repository walk"
+  },
+  {
+    "q": "how does ember extract architecture decisions from commit messages?",
+    "expect": [
+      "src/core/decisions.ts"
+    ],
+    "pq": "mining the rationale behind past changes out of version control"
+  },
+  {
+    "q": "how are corrupt lines in the notes file handled?",
+    "expect": [
+      "src/core/notes.ts"
+    ],
+    "pq": "what happens when the agent memory file has a torn or broken entry"
+  },
+  {
+    "q": "how is a source file split into chunks?",
+    "expect": [
+      "src/core/chunker.ts"
+    ],
+    "pq": "breaking a program into searchable pieces"
+  },
+  {
+    "q": "how does incremental re-indexing avoid re-embedding unchanged files?",
+    "expect": [
+      "src/core/indexer.ts"
+    ],
+    "pq": "speeding up a rebuild when only a few files changed"
+  },
+  {
+    "q": "what MCP tools does the server register?",
+    "expect": [
+      "src/mcp/server.ts"
+    ],
+    "pq": "which capabilities are exposed to an agent over the protocol"
+  },
+  {
+    "q": "how are notes persisted across sessions?",
+    "expect": [
+      "src/core/notes.ts"
+    ],
+    "pq": "where does agent memory live so a later run can read it"
+  },
+  {
+    "q": "how does the offline embedding work without an API key?",
+    "expect": [
+      "src/core/embedder.ts"
+    ],
+    "pq": "turning text into vectors locally"
+  },
+  {
+    "q": "how does the repo map summarize the codebase?",
+    "expect": [
+      "src/core/repomap.ts"
+    ],
+    "pq": "getting a quick orientation of an unfamiliar project"
+  },
+  {
+    "q": "how do I search the index from the command line?",
+    "expect": [
+      "src/cli.ts"
+    ],
+    "pq": "running a query in the terminal"
+  },
+  {
+    "q": "how are index artifacts loaded and validated from disk?",
+    "expect": [
+      "src/core/store.ts"
+    ],
+    "pq": "reading the saved data back and checking it is intact"
+  },
+  {
+    "q": "what happens when the index dimension mismatches the embedder?",
+    "expect": [
+      "src/core/engine.ts"
+    ],
+    "pq": "what if the stored vector width disagrees with the current configuration"
+  },
+  {
+    "q": "how is the HNSW graph serialized and restored?",
+    "expect": [
+      "src/core/hnsw.ts"
+    ],
+    "pq": "saving the proximity graph to disk and bringing it back"
+  },
+  {
+    "q": "how does the ask command answer with an LLM?",
+    "expect": [
+      "src/core/ask.ts"
+    ],
+    "pq": "generating a grounded reply with a model in the loop"
+  }
+]
