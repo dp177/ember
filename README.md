@@ -213,7 +213,7 @@ Deployed via GitHub Pages from the `gh-pages` branch.
 ## Tests
 
 ```bash
-npm test          # 53 tests, hermetic from a fresh clone: HNSW recall,
+npm test          # 55 tests, hermetic from a fresh clone: HNSW recall,
                   # chunking, scanner determinism, end-to-end index+search,
                   # notes persistence, incremental re-index, corrupt/torn
                   # data recovery, LLM provider behavior against a local

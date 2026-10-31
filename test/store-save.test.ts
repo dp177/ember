@@ -57,3 +57,43 @@ test("save clears staging directories left by a crashed earlier save", async () 
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test("a save crashed between the two renames is recovered on next open", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-store-midswap-"));
+  try {
+    await fs.writeFile(path.join(dir, "a.ts"), "export function alphaSwap(): number { return 1; }\n");
+    await indexRepo(dir, new HashingEmbedder());
+    const before = await new EmberStore(dir).load();
+    // Simulate the crash window: live set moved aside, staged set never swapped in.
+    await fs.rename(path.join(dir, ".ember"), path.join(dir, ".ember.backup-11111"));
+    const store = new EmberStore(dir);
+    const meta = await store.readMeta();
+    assert.ok(meta, "readMeta recovers the backup instead of reporting unindexed");
+    const loaded = await store.load();
+    assert.equal(loaded.chunks.length, before.chunks.length, "recovered set is complete");
+    const entries = await fs.readdir(dir);
+    assert.ok(entries.includes(".ember"), "canonical directory restored");
+    assert.ok(!entries.some(e => e.startsWith(".ember.backup-")), "backup consumed by recovery");
+    // And a subsequent save still works and keeps foreign files.
+    await new NoteStore(dir).add("note after recovery", []);
+    await indexRepo(dir, new HashingEmbedder());
+    assert.equal((await new NoteStore(dir).list(5)).length, 1);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a leftover backup next to a live store is old swap output and gets dropped", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-store-leftover-"));
+  try {
+    await fs.writeFile(path.join(dir, "a.ts"), "export function alphaLeft(): number { return 1; }\n");
+    await indexRepo(dir, new HashingEmbedder());
+    await fs.mkdir(path.join(dir, ".ember.backup-22222"));
+    const loaded = await new EmberStore(dir).load();
+    assert.ok(loaded.chunks.length > 0, "live set is used, not the leftover");
+    const entries = await fs.readdir(dir);
+    assert.ok(!entries.some(e => e.startsWith(".ember.backup-")), "stale backup dropped");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

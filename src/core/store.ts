@@ -8,13 +8,18 @@
  *   notes.jsonl  - cross-session agent notes (see notes.ts)
  * No external database; the directory can be deleted to reset.
  *
- * Saves are atomic at the directory level: the new file set is staged in a
- * sibling directory and swapped in with renames (atomic on the same
- * filesystem), so a crash mid-save can never leave a half-written mix of
- * old and new files. Files Ember does not own (notes.jsonl, usage.jsonl,
- * anything future) are carried into the new set before the swap. Worst-case
- * crash between the two renames leaves .ember.backup-<pid> next to a
- * missing .ember; load() then fails honestly and says to rebuild.
+ * Writes: the new file set is staged in a sibling directory and swapped in
+ * with two renames. A crash mid-save can therefore never leave a
+ * half-written mix of old and new files inside .ember; at worst the set is
+ * briefly absent, and the complete pre-swap set sits in .ember.backup-<pid>.
+ * That crash is recovered automatically on the next open (see recover()).
+ * Files Ember does not own (notes.jsonl, usage.jsonl, anything future) are
+ * carried into the new set before the swap.
+ *
+ * Concurrency contract (local tool, one writer at a time): a reader running
+ * during the swap sees either the old set or the new set; a torn read
+ * straddling the swap is detected by consistency validation and retried
+ * once. Two concurrent writers are not supported.
  */
 
 import { promises as fs } from "node:fs";
@@ -53,9 +58,12 @@ export class EmberStore {
     const parent = path.dirname(this.dir);
     const tmp = `${this.dir}.tmp-${process.pid}`;
     const backup = `${this.dir}.backup-${process.pid}`;
-    // Clear staging dirs left by any crashed earlier save in this repo.
+    // Restore-or-drop crash leftovers FIRST: if an earlier save died between
+    // the two renames, its backup is the only complete copy - never delete it.
+    await this.recover();
+    // Staging dirs are never complete sets; safe to drop leftovers now.
     for (const d of await fs.readdir(parent).catch(() => [] as string[])) {
-      if (d.startsWith(".ember.tmp-") || d.startsWith(".ember.backup-")) {
+      if (d.startsWith(".ember.tmp-")) {
         await fs.rm(path.join(parent, d), { recursive: true, force: true });
       }
     }
@@ -81,12 +89,47 @@ export class EmberStore {
     await fs.rm(backup, { recursive: true, force: true });
   }
 
+  /** Recover from a save that crashed mid-swap. If .ember is absent but a
+   * backup directory exists, the backup is the only complete set: restore
+   * the newest one. If .ember is live, leftover backups are the old set
+   * from a completed swap: drop them. Staging dirs are left to save(). */
+  private async recover(): Promise<void> {
+    const parent = path.dirname(this.dir);
+    const live = await fs.access(path.join(this.dir, "meta.json")).then(() => true, () => false);
+    const entries = await fs.readdir(parent).catch(() => [] as string[]);
+    const backups = entries.filter(d => d.startsWith(".ember.backup-"));
+    if (!live && backups.length > 0) {
+      const timed = await Promise.all(backups.map(async b => ({ b, m: (await fs.stat(path.join(parent, b)).catch(() => null))?.mtimeMs ?? 0 })));
+      timed.sort((a, b2) => a.m - b2.m);
+      const newest = timed[timed.length - 1].b;
+      await fs.rename(path.join(parent, newest), this.dir).catch(() => {});
+      for (const { b } of timed.slice(0, -1)) await fs.rm(path.join(parent, b), { recursive: true, force: true });
+    } else if (live) {
+      for (const b of backups) await fs.rm(path.join(parent, b), { recursive: true, force: true });
+    }
+  }
+
   async load(): Promise<{ meta: IndexMeta; chunks: ChunkRecord[]; index: HnswIndex }> {
+    await this.recover();
+    try {
+      return await this.loadOnce();
+    } catch {
+      // A reader can straddle an in-flight save's swap; recovery + one
+      // retry settles on a consistent set.
+      await this.recover();
+      return await this.loadOnce();
+    }
+  }
+
+  private async loadOnce(): Promise<{ meta: IndexMeta; chunks: ChunkRecord[]; index: HnswIndex }> {
     try {
       const meta = JSON.parse(await fs.readFile(path.join(this.dir, "meta.json"), "utf8")) as IndexMeta;
       const lines = (await fs.readFile(path.join(this.dir, "chunks.jsonl"), "utf8")).trim().split("\n");
       const chunks = lines.map(l => JSON.parse(l)) as ChunkRecord[];
       const buf = await fs.readFile(path.join(this.dir, "vectors.f32"));
+      if (meta.chunkCount !== chunks.length || buf.byteLength !== chunks.length * meta.dim * 4) {
+        throw new Error(`inconsistent file set (meta ${meta.chunkCount} chunks, chunks.jsonl ${chunks.length}, vectors ${buf.byteLength} bytes)`);
+      }
       const vectors = new Map<number, Float32Array>();
       for (let i = 0; i < chunks.length; i++) {
         vectors.set(chunks[i].id, new Float32Array(buf.buffer.slice(buf.byteOffset + i * meta.dim * 4, buf.byteOffset + (i + 1) * meta.dim * 4)));
@@ -102,6 +145,7 @@ export class EmberStore {
   }
 
   async readMeta(): Promise<IndexMeta | null> {
+    await this.recover();
     try { return JSON.parse(await fs.readFile(path.join(this.dir, "meta.json"), "utf8")); }
     catch { return null; }
   }

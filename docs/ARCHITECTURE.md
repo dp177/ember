@@ -40,11 +40,13 @@ scan -> chunk -> embed -> HNSW -> persist (.ember/)
 5. **Persist** (`store.ts`): `meta.json`, `chunks.jsonl`, `vectors.f32`
    (row-major, aligned with chunk ids), `hnsw.json`, `files.json` (per-file
    sha1 for incremental re-index), `notes.jsonl`, `usage.jsonl`. Saves are
-   staged in a sibling directory and swapped in with renames (atomic per
-   directory on the same filesystem), so a crash mid-save cannot leave a
-   half-written file set; notes and the usage log are carried across.
-   Reads are hardened against torn/corrupt tails; the notes tail is
-   repaired before append.
+   staged in a sibling directory and swapped in with two renames, so a
+   crash mid-save cannot leave a half-written file set; a crash between
+   the renames is recovered automatically on the next open from the
+   backup directory, and notes and the usage log are carried across.
+   Readers straddling a swap are caught by consistency validation and
+   retried (one writer at a time). Reads are hardened against
+   torn/corrupt tails; the notes tail is repaired before append.
 
 ## Retrieval
 
@@ -119,7 +121,7 @@ dollars.
 
 ## Testing strategy
 
-53 tests, hermetic from a fresh clone (`npm test` builds first). Provider
+55 tests, hermetic from a fresh clone (`npm test` builds first). Provider
 behavior is tested against an in-process mock OpenAI-compatible server, so
 the LLM layer is fully verified with zero real calls. MCP is tested through
 real stdio sessions. The web UI has API-level workflow + security tests and
