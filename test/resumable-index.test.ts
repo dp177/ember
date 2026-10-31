@@ -117,3 +117,26 @@ test("different models with the SAME dim share no vectors (kind carries model id
     assert.equal(meta.embedderKind, "local-wasm:example/model-b");
   } finally { delete process.env.EMBER_CHECKPOINT_FILES; await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+test("embedding progress is logged between checkpoints (log-only, no checkpoint writes)", async () => {
+  const dir = await mkrepo(6);
+  try {
+    process.env.EMBER_PROGRESS_FILES = "2";
+    process.env.EMBER_CHECKPOINT_FILES = "1000"; // no checkpoint this run
+    const logs: string[] = [];
+    const r = await indexRepo(dir, new HashingEmbedder(), m => logs.push(m));
+    const progress = logs.filter(m => /^embedded \d+\/\d+ chunks \(\d+\/\d+ files\)$/.test(m));
+    assert.deepEqual(progress, [
+      "embedded 2/6 chunks (2/6 files)",
+      "embedded 4/6 chunks (4/6 files)",
+      "embedded 6/6 chunks (6/6 files)",
+    ], "progress lines at the configured cadence, including completion");
+    assert.ok(!logs.some(m => m.includes("checkpoint saved")), "no checkpoint at this cadence");
+    assert.ok(!(await fs.stat(`${dir}/.ember.checkpoint`).then(() => true, () => false)), "no checkpoint dir written");
+    assert.equal(r.chunks, 6);
+  } finally {
+    delete process.env.EMBER_PROGRESS_FILES;
+    delete process.env.EMBER_CHECKPOINT_FILES;
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

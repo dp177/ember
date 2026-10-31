@@ -78,3 +78,25 @@ test("embedderFromEnv precedence: provider > explicit lexical opt-out > local se
     "provider config without EMBER_REMOTE_EMBED=1 must not send code remotely - local default wins",
   );
 });
+
+test("local embedder: a failed first download is an actionable error, and a ready line follows a successful load", async () => {
+  const statuses: string[] = [];
+  const failing = new LocalEmbedder("Xenova/test-model", 8,
+    () => Promise.reject(new Error("ENETUNREACH 1.2.3.4:443")),
+    m => statuses.push(m));
+  await assert.rejects(() => failing.embed(["x"]), (e: Error) => {
+    assert.match(e.message, /could not be loaded/, "names the failure");
+    assert.match(e.message, /ENETUNREACH/, "keeps the underlying cause");
+    assert.match(e.message, /check the network connection and retry/, "says what to do");
+    assert.match(e.message, /works fully offline/, "sets the after-download expectation");
+    assert.match(e.message, /EMBER_LEXICAL=1/, "offers the explicit opt-out");
+    assert.match(e.message, /never falls back to lexical silently/, "restates the guarantee");
+    return true;
+  });
+
+  const calls: string[][] = [];
+  const ok = new LocalEmbedder("Xenova/test-model", 8, () => Promise.resolve(stub(8, calls)), m => statuses.push(m));
+  await ok.embed(["x"]);
+  assert.ok(statuses.some(m => m.includes("loading local semantic model")), "load announced");
+  assert.ok(statuses.some(m => m.includes("model Xenova/test-model ready")), "completion confirmed");
+});

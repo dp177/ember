@@ -221,6 +221,8 @@ Indexing now checkpoints progress and a rerun resumes it:
   reuse: an upstream weight change published under the SAME model id is
   not detectable by name comparison.
 - A completed run (or `ember index --full`) clears the checkpoint.
+- Between checkpoints, progress lines log every 100 files
+  (`EMBER_PROGRESS_FILES` overrides) - log-only, no checkpoint writes.
 
 ## Testing strategy
 

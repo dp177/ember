@@ -209,6 +209,12 @@ routing, caching and discounts on the provider's side._
   when you first enable local semantic embeddings. Ember itself sends no
   telemetry anywhere.
 
+- **Long indexing narrates itself.** Progress lines print every 100 files
+  (`EMBER_PROGRESS_FILES` overrides) between checkpoints. A first-run model
+  download ends with an explicit "model ready" line; if it fails, the error
+  keeps the underlying cause, says to check the network and retry (it works
+  offline after one download), and offers `EMBER_LEXICAL=1` as an explicit
+  diagnostic opt-out - never a silent fallback.
 - **Interrupted indexing resumes.** Embedding work is checkpointed to
   `.ember.checkpoint/` (a sibling of the live `.ember/`, which stays
   searchable throughout) every 200 files or 2,000 chunks

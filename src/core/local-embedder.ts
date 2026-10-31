@@ -59,8 +59,21 @@ export class LocalEmbedder implements Embedder {
     }
     // First-use setup must be visible: the model download can take a while.
     // Node CLIs/servers see this on stderr; injected onStatus can redirect it.
-    (this.onStatus ?? ((m: string) => console.error(m)))(`loading local semantic model ${this.model} - first use downloads it once, then it runs offline`);
-    this.extractor = await factory("feature-extraction", this.model, { quantized: true });
+    // First-use setup must be visible: the model download can take a while.
+    // Node CLIs/servers see this on stderr; injected onStatus can redirect it.
+    const status = this.onStatus ?? ((m: string) => console.error(m));
+    status(`loading local semantic model ${this.model} - first use downloads it once, then it runs offline`);
+    try {
+      this.extractor = await factory("feature-extraction", this.model, { quantized: true });
+    } catch (e) {
+      throw new Error(
+        `the local semantic model ${this.model} could not be loaded (${e instanceof Error ? e.message : String(e)}). ` +
+        "The first run downloads it once - check the network connection and retry; after that it works fully offline. " +
+        "To keep working without semantic search meanwhile, set EMBER_LEXICAL=1 (explicit diagnostic opt-out, keyword-only). " +
+        "Ember never falls back to lexical silently.",
+      );
+    }
+    status(`local semantic model ${this.model} ready`);
     return this.extractor;
   }
 

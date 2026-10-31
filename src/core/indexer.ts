@@ -188,9 +188,12 @@ export async function indexRepo(
       const nh = newHashes[c.file];
       if (nh) processedHashes[c.file] = nh; // kept (unchanged) files are complete already
     }
-    let doneFiles = 0, doneChunks = 0, sinceCheckpoint = 0;
+    let doneFiles = 0, doneChunks = 0, sinceCheckpoint = 0, sinceProgress = 0;
     const CHECKPOINT_EVERY_FILES = parseInt(process.env.EMBER_CHECKPOINT_FILES ?? "", 10) || 200;
     const CHECKPOINT_EVERY_CHUNKS = parseInt(process.env.EMBER_CHECKPOINT_CHUNKS ?? "", 10) || 2000;
+    // Progress is visible between checkpoints: a long embed no longer sits
+    // silent for minutes. Log-only; checkpoints stay on their own cadence.
+    const PROGRESS_EVERY_FILES = parseInt(process.env.EMBER_PROGRESS_FILES ?? "", 10) || 100;
     for (const { file, chunks: fc } of freshByFile) {
       const inputs = fc.map(c => `${c.file}${c.symbol ? " :: " + c.symbol : ""}\n${c.text}`);
       const vs = await embedder.embed(inputs);
@@ -200,11 +203,13 @@ export async function indexRepo(
         index?.add(chunks.length - 1, v);
       });
       processedHashes[file] = newHashes[file];
-      doneFiles++; doneChunks += fc.length; sinceCheckpoint += fc.length;
+      doneFiles++; doneChunks += fc.length; sinceCheckpoint += fc.length; sinceProgress += fc.length;
       if (doneFiles % CHECKPOINT_EVERY_FILES === 0 || sinceCheckpoint >= CHECKPOINT_EVERY_CHUNKS) {
         await writeCheckpoint(root, { embedderKind: embedder.kind, dim: embedder.dim, hashes: processedHashes, chunkCount: chunks.length }, chunks, vectors);
-        sinceCheckpoint = 0;
+        sinceCheckpoint = 0; sinceProgress = 0;
         log(`embedded ${doneChunks}/${freshTotal} chunks (${doneFiles}/${freshByFile.length} files) - checkpoint saved`);
+      } else if (doneFiles % PROGRESS_EVERY_FILES === 0) {
+        log(`embedded ${doneChunks}/${freshTotal} chunks (${doneFiles}/${freshByFile.length} files)`);
       }
     }
   }
