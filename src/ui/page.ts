@@ -126,11 +126,16 @@ function linesWithNumbers(text, startLine) {
   return text.split("\\n").map((l, j) => '<span class="ln">' + (startLine + j) + "</span>" + esc(l)).join("\\n");
 }
 
-function hitEl(h, i) {
+function hitEl(h, i, ctx) {
   const el = document.createElement("div");
   el.className = "hit";
+  // ctx (ask mode): contextIndex = the chunk's [n] in the answer's context,
+  // null = retrieved but excluded by the relevance floor - never numbered as
+  // an answer citation. Search mode keeps plain ranking numbers.
+  const label = ctx ? (h.inContext ? "[context " + h.contextIndex + "] " : "") : "[" + (i+1) + "] ";
+  const tag = ctx ? '<span class="sym">' + (h.inContext ? "sent as answer context" : "below the relevance floor - not sent to the model") + "</span>" : "";
   el.innerHTML = '<span class="score">' + h.score.toFixed(4) + '</span>' +
-    '<span class="loc">[' + (i+1) + "] " + esc(h.file) + ":" + h.startLine + "-" + h.endLine + "</span>" +
+    '<span class="loc">' + label + esc(h.file) + ":" + h.startLine + "-" + h.endLine + "</span>" + tag +
     (h.symbol && h.symbol.length > 2 ? '<span class="sym">' + esc(h.symbol) + "</span>" : "") +
     '<pre>' + linesWithNumbers(h.text, h.startLine) + "</pre>";
   // Click the citation to expand into surrounding file context.
@@ -166,21 +171,24 @@ async function run(kind) {
       const mode = document.createElement("div");
       mode.className = "mode " + (d.synthesized ? "synth" : "extractive");
       mode.textContent = d.synthesized
-        ? "synthesized by a chat model - citations validated against retrieved chunks"
+        ? (d.citedCount > 0
+          ? "synthesized by a chat model - citation ids checked against retrieved chunks; claims themselves not verified"
+          : "synthesized by a chat model - the answer cited no retrieved chunk; treat it as unverified")
         : "retrieval only - no chat model configured, no model-generated claims";
       out.appendChild(mode);
       const a = document.createElement("div");
       a.className = "hit answer";
       a.textContent = d.answer;
       out.appendChild(a);
-      // Source cards matter when a model wrote prose over them; the
-      // extractive answer already shows the chunks inline.
+      // Candidate cards matter when a model wrote prose over them; the
+      // extractive answer already shows the chunks inline. Each card says
+      // whether it was sent as answer context or excluded by the floor.
       if (d.synthesized && d.hits && d.hits.length) {
         const head = document.createElement("div");
         head.className = "srchead";
-        head.textContent = "Sources (click a citation for context):";
+        head.textContent = "Retrieved candidates (click for context):";
         out.appendChild(head);
-        d.hits.slice(0, 5).forEach((h, i) => out.appendChild(hitEl(h, i)));
+        d.hits.slice(0, 5).forEach((h, i) => out.appendChild(hitEl(h, i, true)));
       }
     }
   } catch (e) { out.innerHTML = '<div class="hit err">' + esc(e.message) + "</div>"; }

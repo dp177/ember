@@ -84,6 +84,39 @@ test("ask: cited and uncited retrieved chunks are listed separately", async () =
   await close();
 });
 
+test("ask: result exposes context indices and citedCount for cited, uncited and excluded cases", async () => {
+  // Mixed: hit 0 above floor, hit 1 below -> context carries only index 0.
+  const mixed = {
+    embedderKind: "local-wasm:Xenova/all-MiniLM-L6-v2", hybrid: false,
+    async search() { return [
+      { score: 0.55, chunk: { file: "a.ts", startLine: 1, endLine: 3, symbol: "a", text: "export function a() { return 1; }" } },
+      { score: 0.10, chunk: { file: "b.ts", startLine: 1, endLine: 3, symbol: "b", text: "export function b() { return 2; }" } },
+    ]; },
+  } as unknown as EmberEngine;
+  const { base, close } = await chatServer("a returns 1 [1].");
+  const client = new LlmClient({ base, apiKey: "k", chatModel: "m" });
+  const r1 = await answerQuestion(mixed, "what does a return?", 5, { client });
+  assert.deepEqual(r1.context, [0], "only the above-floor chunk is answer context");
+  assert.equal(r1.citedCount, 1);
+  assert.ok(r1.text.includes("Sources cited in the answer:") && !r1.text.includes("b.ts"),
+    "below-floor chunk never appears as a source or candidate in the answer text");
+  await close();
+
+  // Uncited: refusal with no markers -> citedCount 0, context still reported.
+  const { base: base2, close: close2 } = await chatServer("The provided chunks do not contain the answer.");
+  const client2 = new LlmClient({ base: base2, apiKey: "k", chatModel: "m" });
+  const r2 = await answerQuestion(mixed, "unrelated question", 5, { client: client2 });
+  assert.equal(r2.citedCount, 0);
+  assert.deepEqual(r2.context, [0]);
+  await close2();
+
+  // Retrieval-only paths report no context and no citations.
+  const r3 = await answerQuestion(mixed, "what does a return?", 5, { client: null });
+  assert.equal(r3.synthesized, false);
+  assert.deepEqual(r3.context, []);
+  assert.equal(r3.citedCount, 0);
+});
+
 test("ask: chat failure falls back to extractive WITH the failure disclosed", async () => {
   const engine = wasmStub();
   const client = new LlmClient({ base: "http://127.0.0.1:1", apiKey: "k", chatModel: "m" }); // nothing listening

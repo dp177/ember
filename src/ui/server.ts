@@ -241,10 +241,12 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
         const engine = await engineFor();
         const r = await answerQuestion(engine, q, 10, { client: client() });
         json(res, 200, {
-          question: q, answer: r.text, synthesized: r.synthesized,
-          hits: r.hits.map(h => ({
+          question: q, answer: r.text, synthesized: r.synthesized, citedCount: r.citedCount,
+          hits: r.hits.map((h, i) => ({
             file: h.chunk.file, startLine: h.chunk.startLine, endLine: h.chunk.endLine,
             symbol: h.chunk.symbol, score: h.score, text: h.chunk.text,
+            inContext: r.context.includes(i),
+            contextIndex: r.context.includes(i) ? r.context.indexOf(i) + 1 : null,
           })),
         });
         return;

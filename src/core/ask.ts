@@ -19,6 +19,10 @@ export interface AskResult {
   hits: SearchHit[];
   /** true when a chat model produced the prose; false = retrieval only. */
   synthesized: boolean;
+  /** Indices into hits of the chunks sent as chat context ([] when no request carried context). */
+  context: number[];
+  /** Valid in-range citation markers in the model's answer (0 unless synthesized). */
+  citedCount: number;
 }
 
 function cite(h: SearchHit): string {
@@ -127,11 +131,12 @@ export async function answerQuestion(
 ): Promise<AskResult> {
   const hits = await engine.search(question, k);
   if (hits.length === 0) {
-    return { text: "No relevant code found. Is the repo indexed? Run: ember index", hits, synthesized: false };
+    return { text: "No relevant code found. Is the repo indexed? Run: ember index", hits, synthesized: false, context: [], citedCount: 0 };
   }
   const minScore = askMinScore(engine.embedderKind, engine.hybrid);
   const modeNote = askModeNote(engine.embedderKind, engine.hybrid);
-  const passing = hits.filter(h => evidenceScore(h) > minScore);
+  const passingIdx = hits.map((h, i) => ({ h, i })).filter(x => evidenceScore(x.h) > minScore);
+  const passing = passingIdx.map(x => x.h);
 
   const envCap = typeof process !== "undefined" ? parseInt(process.env.EMBER_MAX_OUTPUT_TOKENS ?? "", 10) : NaN;
   const maxAnswerTokens = opts.maxAnswerTokens ?? (Number.isFinite(envCap) ? envCap : 1024);
@@ -156,24 +161,24 @@ export async function answerQuestion(
       if (modeNote) notes.push(modeNote.trim());
       if (cited.size === 0) notes.push("(the model answer contains no citation markers - treat it as unverified and check the retrieved matches below)");
       const suffix = notes.length ? `\n${notes.join("\n")}` : "";
-      return { text: `${answer}${suffix}\n\n${renderSources(passing, cited)}`, hits, synthesized: true };
+      return { text: `${answer}${suffix}\n\n${renderSources(passing, cited)}`, hits, synthesized: true, context: passingIdx.map(x => x.i), citedCount: cited.size };
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
       return { text: extractiveAnswer(hits, question,
-        `Chat synthesis FAILED (${why}). Retrieval only - no model-generated claims below.${modeNote}`, minScore), hits, synthesized: false };
+        `Chat synthesis FAILED (${why}). Retrieval only - no model-generated claims below.${modeNote}`, minScore), hits, synthesized: false, context: [], citedCount: 0 };
     }
   }
 
   if (client?.cfg.chatModel && lexicalMode) {
     return { text: extractiveAnswer(hits, question,
-      "Retrieval only (lexical diagnostic mode: automatic synthesis is unsupported - no calibrated relevance floor exists for this scorer)." + modeNote, minScore), hits, synthesized: false };
+      "Retrieval only (lexical diagnostic mode: automatic synthesis is unsupported - no calibrated relevance floor exists for this scorer)." + modeNote, minScore), hits, synthesized: false, context: [], citedCount: 0 };
   }
   if (client?.cfg.chatModel && minScore > 0 && passing.length === 0) {
     // Synthesis skipped: no retrieved chunk cleared the score floor, so there
     // is no grounded context to send. Say so instead of buying a guess.
     return { text: extractiveAnswer(hits, question,
-      "No grounded sources - chat synthesis skipped (nothing retrieved scored above the relevance floor; no request was sent to the model)." + modeNote, minScore), hits, synthesized: false };
+      "No grounded sources - chat synthesis skipped (nothing retrieved scored above the relevance floor; no request was sent to the model)." + modeNote, minScore), hits, synthesized: false, context: [], citedCount: 0 };
   }
   return { text: extractiveAnswer(hits, question,
-    "Retrieval only (no chat model configured; set EMBER_API_BASE/EMBER_API_KEY/EMBER_CHAT_MODEL for synthesized answers)." + modeNote, minScore), hits, synthesized: false };
+    "Retrieval only (no chat model configured; set EMBER_API_BASE/EMBER_API_KEY/EMBER_CHAT_MODEL for synthesized answers)." + modeNote, minScore), hits, synthesized: false, context: [], citedCount: 0 };
 }
