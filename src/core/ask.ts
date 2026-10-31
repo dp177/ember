@@ -67,15 +67,37 @@ export function askModeNote(embedderKind: string, hybrid: boolean): string {
 
 /** Remove [n] citation markers that point outside the retrieved chunk list.
  * Returns the cleaned answer and how many markers were stripped. */
-export function validateCitations(answer: string, chunkCount: number): { answer: string; stripped: number } {
+export function validateCitations(answer: string, chunkCount: number): { answer: string; stripped: number; cited: Set<number> } {
   let stripped = 0;
+  const cited = new Set<number>();
   const cleaned = answer.replace(/\[(\d+)\]/g, (m, nStr) => {
     const n = parseInt(nStr, 10);
-    if (n >= 1 && n <= chunkCount) return m;
+    if (n >= 1 && n <= chunkCount) { cited.add(n); return m; }
     stripped++;
     return "";
   });
-  return { answer: cleaned.replace(/[ \t]+\n/g, "\n"), stripped };
+  return { answer: cleaned.replace(/[ \t]+\n/g, "\n"), stripped, cited };
+}
+
+/** Numbered source lines for the chunks the answer actually cited, then the
+ * retrieved matches it did not. Retrieval matched all of them; only the
+ * cited ones back a claim in the answer - the distinction is structural
+ * (validated [n] markers), not a relevance judgment about the uncited rest. */
+function renderSources(passing: SearchHit[], cited: Set<number>): string {
+  const citedLines = passing.map((h, i) => ({ h, n: i + 1 })).filter(x => cited.has(x.n));
+  const uncitedLines = passing.map((h, i) => ({ h, n: i + 1 })).filter(x => !cited.has(x.n));
+  const out: string[] = [];
+  if (citedLines.length > 0) {
+    out.push("Sources cited in the answer:");
+    out.push(...citedLines.map(x => `[${x.n}] ${cite(x.h)}`));
+  }
+  if (uncitedLines.length > 0) {
+    out.push(citedLines.length > 0
+      ? "Also retrieved, not cited by the answer (retrieval matches, not claim support):"
+      : "Retrieved matches (the answer cited none of them - retrieval matches, not claim support):");
+    out.push(...uncitedLines.map(x => `[${x.n}] ${cite(x.h)}`));
+  }
+  return out.join("\n");
 }
 
 function extractiveAnswer(hits: SearchHit[], question: string, header: string, minScore = 0): string {
@@ -128,13 +150,13 @@ export async function answerQuestion(
         { role: "system", content: "You answer questions about a codebase using only the provided chunks. Cite every claim as [n] referring to the chunk list, and include the file:line reference. If the chunks don't contain the answer, say so plainly - never invent code, files, or behavior that are not in the chunks." },
         { role: "user", content: `Question: ${question}\n\nCode chunks:\n\n${context}` },
       ], { maxTokens: maxAnswerTokens });
-      const { answer, stripped } = validateCitations(result.content, passing.length);
+      const { answer, stripped, cited } = validateCitations(result.content, passing.length);
       const notes: string[] = [];
       if (stripped > 0) notes.push(`(stripped ${stripped} citation marker(s) pointing outside the retrieved chunks)`);
       if (modeNote) notes.push(modeNote.trim());
-      if (!/\[\d+\]/.test(answer)) notes.push("(the model answer contains no citation markers - treat it as unverified and check the sources below)");
+      if (cited.size === 0) notes.push("(the model answer contains no citation markers - treat it as unverified and check the retrieved matches below)");
       const suffix = notes.length ? `\n${notes.join("\n")}` : "";
-      return { text: `${answer}${suffix}\n\nSources:\n${passing.map((h, i) => `[${i + 1}] ${cite(h)}`).join("\n")}`, hits, synthesized: true };
+      return { text: `${answer}${suffix}\n\n${renderSources(passing, cited)}`, hits, synthesized: true };
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
       return { text: extractiveAnswer(hits, question,

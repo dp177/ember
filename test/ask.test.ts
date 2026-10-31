@@ -57,7 +57,7 @@ test("ask: synthesized answer keeps valid citations, strips bogus ones, lists so
   assert.ok(out.includes("[1]"));
   assert.ok(!out.includes("[42]"), "out-of-range citation removed");
   assert.ok(out.includes("stripped 1 citation"), "stripping disclosed");
-  assert.ok(out.includes("Sources:") && out.includes("vector.ts"));
+  assert.ok(out.includes("Sources cited in the answer:") && out.includes("vector.ts"));
   await close();
 });
 
@@ -67,6 +67,20 @@ test("ask: model abstention ('chunks do not contain the answer') passes through 
   const client = new LlmClient({ base, apiKey: "k", chatModel: "m" });
   const out = (await answerQuestion(engine, "what database does it use?", 5, { client })).text;
   assert.ok(out.includes("do not contain the answer"), "abstention preserved verbatim");
+  assert.ok(out.includes("no citation markers"), "uncited answer is labeled unverified");
+  assert.ok(out.includes("Retrieved matches (the answer cited none of them"), "uncited chunks are labeled retrieval matches, not sources");
+  assert.ok(!out.includes("Sources cited in the answer:"), "no cited-source block when nothing was cited");
+  await close();
+});
+
+test("ask: cited and uncited retrieved chunks are listed separately", async () => {
+  const engine = wasmStub();
+  const { base, close } = await chatServer("Cosine is a dot product [1]. I did not use the other chunk.");
+  const client = new LlmClient({ base, apiKey: "k", chatModel: "m" });
+  const out = (await answerQuestion(engine, "how is cosine computed?", 5, { client })).text;
+  assert.ok(out.includes("Sources cited in the answer:"), "cited block present");
+  assert.ok(out.includes("Also retrieved, not cited by the answer"), "uncited block present and labeled as retrieval matches");
+  assert.ok(!/not claim support.*\n\[1\]/s.test(out), "cited chunk [1] is not listed as uncited");
   await close();
 });
 
