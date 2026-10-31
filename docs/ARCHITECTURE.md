@@ -62,7 +62,15 @@ top-1 5/15, top-5 12/15, MRR 0.483; paraphrased top-1 2/15, top-5 4/15,
 MRR 0.167. Hybrid: verbatim 4/11/0.421, paraphrase 2/6/0.228 - it recovers
 some paraphrase loss at a verbatim cost; a tradeoff, not a win, so it is
 opt-in. Freezing the corpus at a commit (materialized via `git archive`)
-keeps every before/after comparison on exactly the same tree. The paraphrase collapse quantifies the lexical
+keeps every before/after comparison on exactly the same tree.
+
+Optional local semantic embeddings (`local-embedder.ts`, `EMBER_LOCAL_EMBED=1`):
+all-MiniLM-L6-v2 via transformers.js in pure WASM - no API, no cost, nothing
+leaves the machine; a deliberately unbundled optional install. Measured on
+the frozen corpus: paraphrase top-1 2/15 -> 5/15, top-5 4/15 -> 10/15, MRR
+0.167 -> 0.472; with hybrid fusion, verbatim top-1 6/15, MRR 0.499 (the best
+measured configuration). Embedder kind carries the model id, so switching
+models forces an honest full rebuild (same rule as the HTTP embedder). The paraphrase collapse quantifies the lexical
 embedder's core limitation and motivates semantic embeddings (M2). Equal weighting was measured and rejected (top-5 13 -> 10
 on the earlier corpus: exact-match ranking over-rewards files that echo
 query phrasing).

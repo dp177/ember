@@ -28,20 +28,26 @@ import os from "node:os";
 import path from "node:path";
 import { EmberEngine } from "../dist/core/engine.js";
 import { HashingEmbedder } from "../dist/core/embedder.js";
+import { localEmbedderFromEnv } from "../dist/core/local-embedder.js";
 import { indexRepo } from "../dist/core/indexer.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const questions = JSON.parse(await readFile(path.join(root, "eval", "questions.json"), "utf8"));
 const ref = (process.env.EMBER_EVAL_REF ?? (await readFile(path.join(root, "eval", "CORPUS_REF"), "utf8"))).trim();
 const hybrid = process.env.EMBER_HYBRID === "1";
+// EMBER_EVAL_EMBEDDER=local measures the semantic path on the same frozen
+// corpus (needs: npm install @xenova/transformers; downloads the model).
+const embedder = process.env.EMBER_EVAL_EMBEDDER === "local"
+  ? localEmbedderFromEnv({ ...process.env, EMBER_LOCAL_EMBED: "1" })
+  : new HashingEmbedder();
 
 const corpus = await mkdtemp(path.join(os.tmpdir(), "ember-eval-"));
 try {
   execFileSync("git", ["archive", ref, "-o", path.join(corpus, "tree.tar")], { cwd: root });
   execFileSync("tar", ["-xf", "tree.tar"], { cwd: corpus });
   await rm(path.join(corpus, "tree.tar"));
-  await indexRepo(corpus, new HashingEmbedder());
-  var engine = await EmberEngine.load(corpus, new HashingEmbedder(), { hybrid });
+  await indexRepo(corpus, embedder);
+  var engine = await EmberEngine.load(corpus, embedder, { hybrid });
 } catch (e) {
   await rm(corpus, { recursive: true, force: true });
   throw e;
@@ -66,7 +72,7 @@ async function runSet(key) {
   return { top1, top5, mrr, rows };
 }
 
-console.log(`mode: ${hybrid ? "hybrid (experimental)" : "default"}  corpus: ${ref.slice(0, 7)} (frozen)`);
+console.log(`mode: ${hybrid ? "hybrid (experimental)" : "default"}  embedder: ${embedder.kind}  corpus: ${ref.slice(0, 7)} (frozen)`);
 for (const key of ["q", "pq"]) {
   const { top1, top5, mrr, rows } = await runSet(key);
   const label = key === "q" ? "verbatim  " : "paraphrase";

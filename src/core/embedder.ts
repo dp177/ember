@@ -13,6 +13,7 @@
 
 import { normalize } from "./hnsw.js";
 import { LlmClient, llmConfigFromEnv, sharedClientFromEnv, type UsageLogger } from "./llm.js";
+import { localEmbedderFromEnv } from "./local-embedder.js";
 
 export interface Embedder {
   readonly kind: string;
@@ -124,6 +125,8 @@ export function embedderFromEnv(
   env: Record<string, string | undefined> = typeof process !== "undefined" ? process.env : {},
   usage?: UsageLogger,
 ): Embedder {
+  // Explicit provider config wins; then an explicitly enabled local model;
+  // otherwise the zero-install offline lexical engine.
   const cfg = llmConfigFromEnv(env);
   if (cfg?.embedModel) {
     const dim = cfg.embedDim ?? 1536;
@@ -131,5 +134,7 @@ export function embedderFromEnv(
     // aggregate across every caller in this process, per the docs.
     return new HttpEmbedder(sharedClientFromEnv(env, usage)!, undefined, cfg.embedModel, dim);
   }
+  const local = localEmbedderFromEnv(env);
+  if (local) return local;
   return new HashingEmbedder();
 }

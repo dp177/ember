@@ -156,9 +156,19 @@ routing, caching and discounts on the provider's side._
   embeddings. Hybrid mode (BM25 fused at lexical weight 0.25, `--hybrid` /
   `EMBER_HYBRID=1`) recovers some paraphrase loss on this corpus (top-5
   6/15 vs 4/15) at a verbatim cost (top-1 4/15 vs 5/15, MRR 0.421 vs
-  0.483) — a tradeoff, not a win, so it stays opt-in. The corpus is frozen
-  at the commit pinned in `eval/CORPUS_REF`, so these numbers are
-  reproducible and comparable across changes. Reproduce:
+  0.483) — a tradeoff, not a win, so it stays opt-in for the lexical engine.
+- **Local semantic embeddings (opt-in, free).** `EMBER_LOCAL_EMBED=1` runs
+  all-MiniLM-L6-v2 locally in WASM (no API, no cost; needs
+  `npm install @xenova/transformers`). Measured on the same frozen corpus:
+  **paraphrase top-1 2/15 → 5/15, top-5 4/15 → 10/15, MRR 0.167 → 0.472**.
+  With hybrid fusion on top (`EMBER_HYBRID=1`) it is the best measured
+  configuration: verbatim top-1 6/15, MRR 0.499; paraphrase 5/15, 10/15,
+  0.452. Caveats: same 15-question single-corpus sanity check; verbatim
+  top-5 is 11/15 vs lexical's 12/15; first run downloads the model; indexing
+  is slower than hashing. Reproduce: `EMBER_EVAL_EMBEDDER=local node
+  scripts/eval.mjs` (add `EMBER_HYBRID=1` for the fused row).
+- The corpus is frozen at the commit pinned in `eval/CORPUS_REF`, so these
+  numbers are reproducible and comparable across changes. Reproduce:
   `node scripts/eval.mjs` (`EMBER_HYBRID=1` for the hybrid row).
 - **HNSW is exact HNSW, not a placeholder.** M=16, efConstruction=200,
   diversity-preserving neighbor selection (paper alg. 4), serialized graph in

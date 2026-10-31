@@ -33,8 +33,19 @@ retrieval quality first, then the interface, then proof.
 - [x] All LLM behavior tested against an in-process mock OpenAI server.
       44/44 tests, zero real provider calls.
 
-## M2 - Live provider verification (blocked: needs an approved API budget)
+## M2 - Semantic embeddings + live provider verification
 
+- [x] Local semantic embeddings, opt-in and free (`EMBER_LOCAL_EMBED=1`,
+      all-MiniLM-L6-v2 in pure WASM via transformers.js, unbundled install):
+      measured on the frozen eval corpus, paraphrase MRR 0.167 -> 0.472
+      (top-1 2/15 -> 5/15, top-5 4/15 -> 10/15); semantic + hybrid is the
+      best measured configuration (verbatim 6/11/0.499, paraphrase
+      5/10/0.452). Reproducible: EMBER_EVAL_EMBEDDER=local node scripts/eval.mjs.
+
+- [ ] Live provider verification (still blocked: needs an approved API
+      budget - the local path now covers semantic retrieval without one; a
+      budget is only needed for synthesized chat answers and for verifying
+      the HTTP provider path against real endpoints).
 - [ ] Verify embeddings + chat against OpenRouter with real models;
       measure and report per-call token usage (provider-reported).
 - [ ] Re-run the retrieval sanity check with real embeddings; publish the
