@@ -1,6 +1,8 @@
 /** Ember MCP server: exposes persistent codebase memory to any MCP client
  * (Claude Code, Cursor, or any other MCP-aware client). Transport: stdio. */
 
+import { createRequire } from "node:module";
+const EMBER_VERSION = (createRequire(import.meta.url)("../../package.json") as { version: string }).version;
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -17,7 +19,7 @@ import { getCommits, getDecisions } from "../core/decisions.js";
 import { answerQuestion } from "../core/ask.js";
 
 export async function startMcpServer(defaultRoot: string): Promise<void> {
-  const server = new McpServer({ name: "ember", version: "0.2.0" });
+  const server = new McpServer({ name: "ember", version: EMBER_VERSION });
   {
     const choice = embedderChoiceFromEnv();
     if (choice.warning) console.error(`note: ${choice.warning}`);
