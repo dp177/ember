@@ -21,7 +21,7 @@ async function setup(): Promise<{ base: string; dir: string; close: () => Promis
   await fs.writeFile(path.join(dir, ".emberignore"), "ignored.ts\n");
   await fs.writeFile(path.join(dir, "ignored.ts"), "export function ignoredSecret(): string {\n  return 'xyzzy-fixture';\n}\n");
   await indexRepo(dir, new HashingEmbedder());
-  const server = createUiServer(dir);
+  const server = createUiServer(dir, { embedder: new HashingEmbedder() });
   await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
   const { port } = server.address() as AddressInfo;
   return { base: `http://127.0.0.1:${port}`, dir, close: () => new Promise(r => server.close(() => r())) };
@@ -74,7 +74,7 @@ test("ui workflow: status -> search with real excerpts -> expand context -> ask 
     // Note save -> read back -> survives a server restart (persists on disk).
     await (await fetch(`${base}/api/notes`, { method: "POST", body: JSON.stringify({ text: "ui workflow note", tags: ["ui"] }) })).json();
     await close();
-    const server2 = createUiServer(dir);
+    const server2 = createUiServer(dir, { embedder: new HashingEmbedder() });
     await new Promise<void>(r => server2.listen(0, "127.0.0.1", r));
     const base2 = `http://127.0.0.1:${(server2.address() as AddressInfo).port}`;
     const notes = await (await fetch(`${base2}/api/notes`)).json() as any;

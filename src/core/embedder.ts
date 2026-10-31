@@ -13,7 +13,7 @@
 
 import { normalize } from "./hnsw.js";
 import { LlmClient, llmConfigFromEnv, sharedClientFromEnv, type UsageLogger } from "./llm.js";
-import { localEmbedderFromEnv } from "./local-embedder.js";
+import { LocalEmbedder, localEmbedderFromEnv } from "./local-embedder.js";
 
 export interface Embedder {
   readonly kind: string;
@@ -118,15 +118,17 @@ export class HttpEmbedder implements Embedder {
   }
 }
 
-/** Pick an embedder from the environment; defaults to the offline lexical one.
- * Outside Node (e.g. the browser demo bundle) there is no process.env, so it
- * always falls back to the offline lexical embedder. */
+/** Pick an embedder from the environment.
+ * Default: the local semantic model (WASM, offline after a one-time model
+ * download). Explicit provider config (EMBER_API_BASE + EMBER_EMBED_MODEL)
+ * wins; EMBER_LEXICAL=1 is the explicit opt-out to the offline lexical
+ * engine. A semantic failure throws - Ember never silently falls back to
+ * lexical results. Outside Node (e.g. the browser demo bundle) there is no
+ * process.env, so it uses the offline lexical embedder. */
 export function embedderFromEnv(
   env: Record<string, string | undefined> = typeof process !== "undefined" ? process.env : {},
   usage?: UsageLogger,
 ): Embedder {
-  // Explicit provider config wins; then an explicitly enabled local model;
-  // otherwise the zero-install offline lexical engine.
   const cfg = llmConfigFromEnv(env);
   if (cfg?.embedModel) {
     const dim = cfg.embedDim ?? 1536;
@@ -134,7 +136,27 @@ export function embedderFromEnv(
     // aggregate across every caller in this process, per the docs.
     return new HttpEmbedder(sharedClientFromEnv(env, usage)!, undefined, cfg.embedModel, dim);
   }
-  const local = localEmbedderFromEnv(env);
-  if (local) return local;
-  return new HashingEmbedder();
+  return embedderChoiceFromEnv(env, usage).embedder;
+}
+
+/** Resolve the embedder AND why it was chosen, so callers can surface the
+ * choice instead of silently selecting a non-default engine. */
+export function embedderChoiceFromEnv(
+  env: Record<string, string | undefined> = typeof process !== "undefined" ? process.env : {},
+  usage?: UsageLogger,
+): { embedder: Embedder; reason: string } {
+  const cfg = llmConfigFromEnv(env);
+  if (cfg?.embedModel) {
+    const dim = cfg.embedDim ?? 1536;
+    return {
+      embedder: new HttpEmbedder(sharedClientFromEnv(env, usage)!, undefined, cfg.embedModel, dim),
+      reason: `EMBER_EMBED_MODEL=${cfg.embedModel} is configured - remote provider embeddings, indexed text leaves this machine`,
+    };
+  }
+  if (env.EMBER_LEXICAL === "1") {
+    return { embedder: new HashingEmbedder(), reason: "explicit lexical opt-out (EMBER_LEXICAL=1) - diagnostic/baseline mode, not the product default" };
+  }
+  // Default: the local semantic model. EMBER_LOCAL_EMBED / EMBER_LOCAL_EMBED_MODEL
+  // / EMBER_LOCAL_EMBED_DIM still override the model choice.
+  return { embedder: localEmbedderFromEnv(env) ?? new LocalEmbedder(), reason: "local semantic default (WASM, offline after a one-time model download)" };
 }

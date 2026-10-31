@@ -64,7 +64,7 @@ test("ui: malformed notes JSON is a 400, a missing in-repo file is a 404, escape
   const dir = await mkrepo({ "ok.ts": OK });
   try {
     await indexRepo(dir, new HashingEmbedder());
-    const server = createUiServer(dir);
+    const server = createUiServer(dir, { embedder: new HashingEmbedder() });
     await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
@@ -82,7 +82,7 @@ test("concurrency: 15 searches racing a re-index all get a consistent answer, no
   const dir = await mkrepo({ "ok.ts": OK, "beta.ts": "export function betaRace(): number { return 2; }\n" });
   try {
     await indexRepo(dir, new HashingEmbedder());
-    const server = createUiServer(dir);
+    const server = createUiServer(dir, { embedder: new HashingEmbedder() });
     await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {

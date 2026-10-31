@@ -32,11 +32,17 @@ scan -> chunk -> embed -> persist (.ember/)   [HNSW only with EMBER_HNSW=1]
    symbols fall back to overlapping windows. Chunks carry
    `file / startLine / endLine / symbol / text`, which is what makes
    `file:line` citations exact.
-3. **Embed** (`embedder.ts`): pluggable.
-   - Default `HashingEmbedder`: deterministic, offline, lexical. Tokenizes
+3. **Embed** (`embedder.ts`): pluggable. Resolution order
+   (`embedderChoiceFromEnv`): explicit provider config, then the explicit
+   lexical opt-out (`EMBER_LEXICAL=1`), then the default local semantic
+   model. The CLI prints the choice and its reason on stderr whenever it is
+   not the default, so a non-default engine is never selected silently.
+   - Default `LocalEmbedder`: all-MiniLM-L6-v2 in WASM (see below).
+   - Opt-out `HashingEmbedder`: deterministic, offline, lexical. Tokenizes
      code (camelCase/snake_case split, light stemming) and hashes tokens into
      a 1024-dim vector (FNV-1a, signed slots, log TF). Matches shared
-     vocabulary; does not paraphrase.
+     vocabulary; does not paraphrase. Diagnostic/baseline mode, not the
+     product default.
    - Optional `HttpEmbedder`: any OpenAI-compatible `/embeddings` endpoint.
      The returned dimension is validated against `EMBER_EMBED_DIM` - a
      mismatch fails loudly instead of corrupting the store.
@@ -90,9 +96,12 @@ some paraphrase loss at a verbatim cost; a tradeoff, not a win, so it is
 opt-in. Freezing the corpus at a commit (materialized via `git archive`)
 keeps every before/after comparison on exactly the same tree.
 
-Optional local semantic embeddings (`local-embedder.ts`, `EMBER_LOCAL_EMBED=1`):
-all-MiniLM-L6-v2 via transformers.js in pure WASM - no API key, no cost; a
-deliberately unbundled optional install. The one-time model download
+Local semantic embeddings (`local-embedder.ts`, the default since v0.6.0):
+all-MiniLM-L6-v2 via transformers.js in pure WASM - no API key, no cost;
+@xenova/transformers is a regular dependency. A semantic failure (missing
+package, failed download) is an error, never a silent lexical fallback.
+`EMBER_LOCAL_EMBED` / `EMBER_LOCAL_EMBED_MODEL` / `EMBER_LOCAL_EMBED_DIM`
+still override the model choice. The one-time model download
 fetches public model files from Hugging Face; after that, no code or
 query leaves the machine for retrieval. Ember itself sends no telemetry. Measured on
 the frozen corpus: paraphrase top-1 2/15 -> 5/15, top-5 4/15 -> 10/15, MRR

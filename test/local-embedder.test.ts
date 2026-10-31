@@ -54,12 +54,20 @@ test("localEmbedderFromEnv: off by default, explicit opt-in, validated dim", () 
   assert.throws(() => localEmbedderFromEnv({ EMBER_LOCAL_EMBED: "1", EMBER_LOCAL_EMBED_DIM: "nope" }), /invalid EMBER_LOCAL_EMBED_DIM/);
 });
 
-test("embedderFromEnv precedence: provider > local > lexical", () => {
-  assert.ok(embedderFromEnv({}) instanceof HashingEmbedder);
+test("embedderFromEnv precedence: provider > explicit lexical opt-out > local semantic default", () => {
+  // Semantic is the default: no env at all selects the local WASM model.
+  const dflt = embedderFromEnv({});
+  assert.equal(dflt.kind, `local-wasm:${DEFAULT_LOCAL_EMBED_MODEL}`);
+  assert.equal(dflt.dim, 384);
+  // EMBER_LOCAL_EMBED=1 still selects the same default explicitly.
   assert.equal(embedderFromEnv({ EMBER_LOCAL_EMBED: "1" }).kind, `local-wasm:${DEFAULT_LOCAL_EMBED_MODEL}`);
+  // Model overrides still apply.
+  assert.equal(embedderFromEnv({ EMBER_LOCAL_EMBED_MODEL: "Xenova/bge-small", EMBER_LOCAL_EMBED_DIM: "512" }).kind, "local-wasm:Xenova/bge-small");
+  // Explicit lexical opt-out.
+  assert.ok(embedderFromEnv({ EMBER_LEXICAL: "1" }) instanceof HashingEmbedder);
   assert.equal(
-    embedderFromEnv({ EMBER_API_BASE: "http://x", EMBER_API_KEY: "k", EMBER_EMBED_MODEL: "m", EMBER_LOCAL_EMBED: "1" }).kind,
+    embedderFromEnv({ EMBER_API_BASE: "http://x", EMBER_API_KEY: "k", EMBER_EMBED_MODEL: "m", EMBER_LEXICAL: "1" }).kind,
     "http-openai-compatible:m",
-    "explicit provider config wins over local",
+    "explicit provider config wins over the lexical opt-out and the semantic default",
   );
 });

@@ -7,7 +7,7 @@
 import * as http from "node:http";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { embedderFromEnv } from "../core/embedder.js";
+import { embedderChoiceFromEnv, embedderFromEnv } from "../core/embedder.js";
 import { EmberEngine } from "../core/engine.js";
 import { indexRepo } from "../core/indexer.js";
 import { EmberStore } from "../core/store.js";
@@ -18,7 +18,11 @@ import { answerQuestion } from "../core/ask.js";
 import { JsonlUsageLogger, LlmClient, sharedClientFromEnv } from "../core/llm.js";
 import { PAGE } from "./page.js";
 
-export interface UiOptions { hybrid?: boolean; }
+export interface UiOptions {
+  hybrid?: boolean;
+  /** Test/embedder override; production resolves embedderChoiceFromEnv. */
+  embedder?: import("../core/embedder.js").Embedder;
+}
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff" });
@@ -37,10 +41,15 @@ async function resolveInside(root: string, rel: string): Promise<string | null> 
 async function loadEngine(root: string, opts: UiOptions): Promise<EmberEngine> {
   // embedderFromEnv resolves the shared process-wide provider client, so
   // per-request engine loads no longer restart the EMBER_MAX_CALLS budget.
-  return EmberEngine.load(root, embedderFromEnv(process.env, JsonlUsageLogger.forRepo(root)), { hybrid: opts.hybrid });
+  const embedder = opts.embedder ?? embedderFromEnv(process.env, JsonlUsageLogger.forRepo(root));
+  return EmberEngine.load(root, embedder, { hybrid: opts.hybrid });
 }
 
 export function createUiServer(root: string, opts: UiOptions = {}): http.Server {
+  if (!opts.embedder) {
+    const choice = embedderChoiceFromEnv(process.env, JsonlUsageLogger.forRepo(root));
+    if (!choice.embedder.kind.startsWith("local-wasm:")) console.error(`embedder: ${choice.embedder.kind} - ${choice.reason}`);
+  }
   // One process-wide provider client backs chat and embeddings alike
   // (sharedClientFromEnv): EMBER_MAX_CALLS and usage accounting aggregate
   // across requests, and its serialized queue keeps concurrent asks from
@@ -84,7 +93,7 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
       }
 
       if (route === "/api/index" && req.method === "POST") {
-        const r = await indexRepo(root, embedderFromEnv(process.env, JsonlUsageLogger.forRepo(root)), undefined, { full: url.searchParams.get("full") === "1" });
+        const r = await indexRepo(root, opts.embedder ?? embedderFromEnv(process.env, JsonlUsageLogger.forRepo(root)), undefined, { full: url.searchParams.get("full") === "1" });
         json(res, 200, r);
         return;
       }

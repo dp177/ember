@@ -140,10 +140,13 @@ routing, caching and discounts on the provider's side._
 
 ## Honest capability notes
 
-- **Default embedder is lexical, not semantic.** Out of the box Ember uses a
-  deterministic hashing embedder (stemmed token overlap). It matches shared
-  vocabulary well — code identifiers are meaningful — but it does not
-  paraphrase.
+- **Default embedder is local semantic.** Out of the box Ember embeds with
+  all-MiniLM-L6-v2 running locally in WASM via transformers.js (no API key,
+  no per-call cost; the model downloads once on first use, then works
+  offline). `EMBER_LEXICAL=1` is the explicit opt-out to the deterministic
+  hashing embedder (stemmed token overlap) - it matches shared vocabulary
+  well but does not paraphrase. A semantic failure (missing package,
+  failed download) is an error, never a silent lexical fallback.
 - **Measured retrieval quality (offline).** A 15-question sanity check about
   this repo — not a benchmark. Metrics: top-1/top-5 file accuracy and MRR;
   the corpus is frozen for each comparison; the question file itself is
@@ -157,9 +160,9 @@ routing, caching and discounts on the provider's side._
   `EMBER_HYBRID=1`) recovers some paraphrase loss on this corpus (top-5
   6/15 vs 4/15) at a verbatim cost (top-1 4/15 vs 5/15, MRR 0.421 vs
   0.483) — a tradeoff, not a win, so it stays opt-in for the lexical engine.
-- **Local semantic embeddings (opt-in, free).** `EMBER_LOCAL_EMBED=1` runs
-  all-MiniLM-L6-v2 locally in WASM (no API, no cost; needs
-  `npm install @xenova/transformers`). Measured on the same frozen corpus:
+- **Local semantic embeddings (default, free).** The default runs
+  all-MiniLM-L6-v2 locally in WASM (no API, no cost; @xenova/transformers
+  is a regular dependency since v0.6.0). Measured on the same frozen corpus:
   **paraphrase top-1 2/15 → 5/15, top-5 4/15 → 10/15, MRR 0.167 → 0.472**.
   With hybrid fusion on top (`EMBER_HYBRID=1`) it is the best measured
   configuration: verbatim top-1 6/15, MRR 0.499; paraphrase 5/15, 10/15,
@@ -193,7 +196,8 @@ routing, caching and discounts on the provider's side._
 ```
 src/core/scanner.ts    git-aware file walk + .emberignore (skips deps, build output, binaries)
 src/core/chunker.ts    symbol-aware code chunking (falls back to windows)
-src/core/embedder.ts   pluggable embedders (offline lexical / HTTP endpoint)
+src/core/embedder.ts   pluggable embedders (local WASM semantic default /
+                       HTTP endpoint / explicit lexical opt-out)
 src/core/llm.ts        OpenAI-compatible client: retries, request guards, usage records
 src/core/hybrid.ts     BM25 lexical scorer + reciprocal rank fusion (opt-in)
 src/core/hnsw.ts       pure-TS HNSW index (cosine, diversity selection)
@@ -218,7 +222,8 @@ where it is going.
 in the browser: it fetches the published `.ember` index artifacts of this
 repo and scores with the exact same code path as `EmberEngine.search`,
 using the graph when the artifacts include one and an exact scan otherwise
-(parity is enforced by `test/demo-web.test.ts`). Retrieval is the default offline lexical mode —
+(parity is enforced by `test/demo-web.test.ts`). Retrieval in the demo is the
+offline lexical mode (a browser bundle cannot run the WASM model) —
 no data leaves the browser.
 
 ```bash

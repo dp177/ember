@@ -6,7 +6,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { embedderFromEnv } from "../core/embedder.js";
+import { embedderChoiceFromEnv, embedderFromEnv } from "../core/embedder.js";
 import { EmberEngine } from "../core/engine.js";
 import { indexRepo } from "../core/indexer.js";
 import { EmberStore } from "../core/store.js";
@@ -18,6 +18,10 @@ import { answerQuestion } from "../core/ask.js";
 
 export async function startMcpServer(defaultRoot: string): Promise<void> {
   const server = new McpServer({ name: "ember", version: "0.2.0" });
+  {
+    const choice = embedderChoiceFromEnv();
+    if (!choice.embedder.kind.startsWith("local-wasm:")) console.error(`embedder: ${choice.embedder.kind} - ${choice.reason}`);
+  }
   const engines = new Map<string, { engine: Promise<EmberEngine>; stamp: string }>();
 
   const resolveRoot = (p?: string) => path.resolve(p ?? defaultRoot);

@@ -47,9 +47,10 @@ export class LocalEmbedder implements Embedder {
         mod = await import("@xenova/transformers" as string);
       } catch {
         throw new Error(
-          "local semantic embeddings need transformers.js: run `npm install @xenova/transformers` " +
-          "(~large one-time install; the model itself downloads on first use). " +
-          "Alternatively unset EMBER_LOCAL_EMBED for the offline lexical engine, or configure EMBER_API_BASE for a provider.",
+          "local semantic embeddings (the default) need transformers.js: run `npm install @xenova/transformers` " +
+          "(~large one-time install; the model itself downloads once on first use, then works offline). " +
+          "To opt out of semantic search explicitly, set EMBER_LEXICAL=1 for the offline lexical engine, " +
+          "or configure EMBER_API_BASE for a provider. Ember never falls back to lexical silently.",
         );
       }
       if (mod.env) mod.env.allowLocalModels = false; // explicit model ids only

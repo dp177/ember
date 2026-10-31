@@ -3,7 +3,7 @@
 
 import { Command } from "commander";
 import * as path from "node:path";
-import { embedderFromEnv } from "./core/embedder.js";
+import { embedderChoiceFromEnv, embedderFromEnv } from "./core/embedder.js";
 import { EmberEngine } from "./core/engine.js";
 import { indexRepo } from "./core/indexer.js";
 import { checkFreshness, mtimeDrift } from "./core/freshness.js";
@@ -26,13 +26,21 @@ program
 const rootOf = (p?: string) => path.resolve(p ?? process.cwd());
 const hybridOf = (opts: { hybrid?: boolean }) => ({ hybrid: opts.hybrid || process.env.EMBER_HYBRID === "1" });
 
+/** Resolve the embedder for a CLI command and disclose any non-default
+ * choice on stderr - remote or lexical selection must never be silent. */
+function cliEmbedder(usage?: Parameters<typeof embedderChoiceFromEnv>[1]) {
+  const { embedder, reason } = embedderChoiceFromEnv(process.env, usage);
+  if (!embedder.kind.startsWith("local-wasm:")) console.error(`embedder: ${embedder.kind} - ${reason}`);
+  return embedder;
+}
+
 program.command("index")
   .description("Index a repository into persistent local memory (.ember/). Incremental by default.")
   .option("--path <dir>", "repo root", ".")
   .option("--full", "ignore existing state and rebuild from scratch", false)
   .action(async (opts) => {
     const root = rootOf(opts.path);
-    const r = await indexRepo(root, embedderFromEnv(process.env, JsonlUsageLogger.forRepo(root)), m => console.error(m), { full: opts.full });
+    const r = await indexRepo(root, cliEmbedder(JsonlUsageLogger.forRepo(root)), m => console.error(m), { full: opts.full });
     console.log(`indexed ${r.chunks} chunks from ${r.files} files (dim ${r.dim})`);
     if (r.incremental) console.log(`incremental: reused ${r.kept} chunks from unchanged files, embedded ${r.embedded} new/changed`);
   });
@@ -44,7 +52,7 @@ program.command("search <query>")
   .option("--hybrid", "experimental: fuse vector ranking with BM25 (EMBER_HYBRID=1)", false)
   .action(async (query, opts) => {
     const root = rootOf(opts.path);
-    const engine = await EmberEngine.load(root, embedderFromEnv(), hybridOf(opts));
+    const engine = await EmberEngine.load(root, cliEmbedder(), hybridOf(opts));
     const hits = await engine.search(query, parseInt(opts.k, 10));
     for (const [i, h] of hits.entries()) {
       console.log(`\n[${i + 1}] ${h.chunk.file}:${h.chunk.startLine}-${h.chunk.endLine}${h.chunk.symbol ? ` (${h.chunk.symbol})` : ""}  score=${h.score.toFixed(3)}`);
@@ -62,7 +70,7 @@ program.command("ask <question>")
   .option("--hybrid", "experimental: fuse vector ranking with BM25 (EMBER_HYBRID=1)", false)
   .action(async (question, opts) => {
     const root = rootOf(opts.path);
-    const engine = await EmberEngine.load(root, embedderFromEnv(), hybridOf(opts));
+    const engine = await EmberEngine.load(root, cliEmbedder(), hybridOf(opts));
     // Shared with the query embedder above: one cap counter per process.
     const client = sharedClientFromEnv(process.env, JsonlUsageLogger.forRepo(root));
     console.log((await answerQuestion(engine, question, 10, { client })).text);
@@ -207,9 +215,9 @@ program.command("demo")
     const root = rootOf(".");
     if (!(await new EmberStore(root).exists())) {
       console.error("indexing ember's own source first ...");
-      await indexRepo(root, embedderFromEnv(), m => console.error(m));
+      await indexRepo(root, cliEmbedder(), m => console.error(m));
     }
-    const engine = await EmberEngine.load(root, embedderFromEnv());
+    const engine = await EmberEngine.load(root, cliEmbedder());
     const qs = [
       "how does the approximate nearest neighbor index select neighbors?",
       "where does repo scanning decide which files to skip?",
