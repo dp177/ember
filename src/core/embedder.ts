@@ -158,5 +158,5 @@ export function embedderChoiceFromEnv(
   }
   // Default: the local semantic model. EMBER_LOCAL_EMBED / EMBER_LOCAL_EMBED_MODEL
   // / EMBER_LOCAL_EMBED_DIM still override the model choice.
-  return { embedder: localEmbedderFromEnv(env) ?? new LocalEmbedder(), reason: "local semantic default (WASM, offline after a one-time model download)" };
+    return { embedder: localEmbedderFromEnv(env) ?? new LocalEmbedder(), reason: "local semantic default (WASM, offline after a one-time model download)" };
 }

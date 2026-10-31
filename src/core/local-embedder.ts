@@ -31,6 +31,7 @@ export class LocalEmbedder implements Embedder {
     private model = DEFAULT_LOCAL_EMBED_MODEL,
     dim = 384,
     private factory?: PipelineFactory,
+    private onStatus?: (msg: string) => void,
   ) {
     // Kind carries the model (same rule as HttpEmbedder): switching local
     // models forces an honest full rebuild via the indexer comparison.
@@ -56,6 +57,9 @@ export class LocalEmbedder implements Embedder {
       if (mod.env) mod.env.allowLocalModels = false; // explicit model ids only
       factory = mod.pipeline as PipelineFactory;
     }
+    // First-use setup must be visible: the model download can take a while.
+    // Node CLIs/servers see this on stderr; injected onStatus can redirect it.
+    (this.onStatus ?? ((m: string) => console.error(m)))(`loading local semantic model ${this.model} - first use downloads it once, then it runs offline`);
     this.extractor = await factory("feature-extraction", this.model, { quantized: true });
     return this.extractor;
   }

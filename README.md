@@ -167,8 +167,15 @@ routing, caching and discounts on the provider's side._
   With hybrid fusion on top (`EMBER_HYBRID=1`) it is the best measured
   configuration: verbatim top-1 6/15, MRR 0.499; paraphrase 5/15, 10/15,
   0.452. Caveats: same 15-question single-corpus sanity check; verbatim
-  top-5 is 11/15 vs lexical's 12/15; first run downloads the model; indexing
-  is slower than hashing. Reproduce: `EMBER_EVAL_EMBEDDER=local node
+  top-5 is 11/15 vs lexical's 12/15; first use downloads the model once
+  (a status line says so), then it runs offline. Measured cost on the
+  frozen corpus (814 chunks, 47 files, 2-core 2 GB test machine):
+  indexing 46 s wall clock with 1,355 MB peak memory (~18 chunks/s on
+  real code chunks - much slower than hashing), a cold CLI query 0.3-0.4 s
+  with ~200 MB peak memory (cached model loads in ~205 ms; ~2 ms per
+  query embedding after that). An earlier "1,200 chunks in 4.8 seconds"
+  figure was measured under different, unrecorded conditions and is
+  superseded by these numbers. Reproduce: `EMBER_EVAL_EMBEDDER=local node
   scripts/eval.mjs` (add `EMBER_HYBRID=1` for the fused row).
 - The corpus is frozen at the commit pinned in `eval/CORPUS_REF`, so these
   numbers are reproducible and comparable across changes. Reproduce:
