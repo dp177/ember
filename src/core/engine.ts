@@ -69,6 +69,11 @@ export class EmberEngine {
     return new EmberEngine(meta, chunks, index, vectors, embedder, opts.hybrid ?? false);
   }
 
+  /** Kind of the embedder this index was built with (e.g. local-wasm:Xenova/all-MiniLM-L6-v2). */
+  get embedderKind(): string {
+    return this.embedder.kind;
+  }
+
   /** Exact scan over all chunk vectors. Default retrieval structure: at the
    * sizes Ember targets this costs single-digit to low-hundreds of ms per
    * query (measured here: 7ms at 814 chunks, dim 1024) and removes the

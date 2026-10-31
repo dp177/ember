@@ -25,6 +25,23 @@ function cite(h: SearchHit): string {
   return `${h.chunk.file}:${h.chunk.startLine}-${h.chunk.endLine}${h.chunk.symbol ? " (" + h.chunk.symbol + ")" : ""}`;
 }
 
+/** Calibrated top-score floor for the local WASM semantic path. Measured
+ * 31 October on the two pinned eval corpora (Ember f347319, flask 49943b5,
+ * Xenova/all-MiniLM-L6-v2): 60 known-relevant probes all scored above 0.207
+ * at top-1 while 20 off-topic probes scored 0.111-0.258. At 0.20: zero false
+ * abstentions, 15/20 off-topic caught. This is a calibrated heuristic for
+ * THIS model family on THOSE corpora - it cannot prove answerability, and
+ * lexical/hybrid scores live on a different scale (floor 0 there, the old
+ * behavior). EMBER_ASK_MIN_SCORE overrides. Raw `ember search` never
+ * applies this floor; it only gates what Ask presents as evidence. */
+export const ASK_MIN_SEMANTIC_SCORE = 0.2;
+
+export function askMinScore(embedderKind: string, env: NodeJS.ProcessEnv = process.env): number {
+  const raw = parseFloat(env.EMBER_ASK_MIN_SCORE ?? "");
+  if (Number.isFinite(raw)) return raw;
+  return embedderKind.startsWith("local-wasm:") ? ASK_MIN_SEMANTIC_SCORE : 0;
+}
+
 /** Remove [n] citation markers that point outside the retrieved chunk list.
  * Returns the cleaned answer and how many markers were stripped. */
 export function validateCitations(answer: string, chunkCount: number): { answer: string; stripped: number } {
@@ -38,13 +55,14 @@ export function validateCitations(answer: string, chunkCount: number): { answer:
   return { answer: cleaned.replace(/[ \t]+\n/g, "\n"), stripped };
 }
 
-function extractiveAnswer(hits: SearchHit[], question: string, header: string): string {
-  // A chunk with no positive similarity is not a "source" - presenting it
-  // as one invents relevance. Say so instead of padding the list.
-  const sources = hits.filter(h => h.score > 0);
+function extractiveAnswer(hits: SearchHit[], question: string, header: string, minScore = 0): string {
+  // A chunk below the score floor is not a "source" - presenting it as one
+  // invents relevance. Say so instead of padding the list.
+  const sources = hits.filter(h => h.score > minScore);
   const lines = [header, ""];
   if (sources.length === 0) {
-    lines.push(`No chunks scored above zero for: "${question}". Try rephrasing, or check the repo is indexed (ember status).`);
+    const top = hits[0];
+    lines.push(`No chunks scored high enough to treat as relevant for: "${question}"${top ? ` (top score ${top.score.toFixed(3)}, at or below the ${minScore} floor)` : ""}. The closest match${top ? ` (${cite(top)})` : ""} is likely unrelated. Try rephrasing, or check the repo is indexed (ember status).`);
     return lines.join("\n");
   }
   lines.push(`Retrieved sources for: "${question}" (ranked by score; retrieval is not an answer)`, "");
@@ -66,11 +84,13 @@ export async function answerQuestion(
   if (hits.length === 0) {
     return { text: "No relevant code found. Is the repo indexed? Run: ember index", hits, synthesized: false };
   }
+  const minScore = askMinScore(engine.embedderKind);
+  const passing = hits.filter(h => h.score > minScore);
 
   const envCap = typeof process !== "undefined" ? parseInt(process.env.EMBER_MAX_OUTPUT_TOKENS ?? "", 10) : NaN;
   const maxAnswerTokens = opts.maxAnswerTokens ?? (Number.isFinite(envCap) ? envCap : 1024);
   const client = opts.client ?? null;
-  if (client?.cfg.chatModel) {
+  if (client?.cfg.chatModel && (minScore === 0 || passing.length > 0)) {
     const context = hits.map((h, i) => `[${i + 1}] ${cite(h)}\n${h.chunk.text}`).join("\n\n---\n\n");
     try {
       const result = await client.chat([
@@ -86,10 +106,16 @@ export async function answerQuestion(
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
       return { text: extractiveAnswer(hits, question,
-        `Chat synthesis FAILED (${why}). Retrieval only - no model-generated claims below.`), hits, synthesized: false };
+        `Chat synthesis FAILED (${why}). Retrieval only - no model-generated claims below.`, minScore), hits, synthesized: false };
     }
   }
 
+  if (client?.cfg.chatModel && minScore > 0 && passing.length === 0) {
+    // Synthesis skipped: no retrieved chunk cleared the score floor, so there
+    // is no grounded context to send. Say so instead of buying a guess.
+    return { text: extractiveAnswer(hits, question,
+      "No grounded sources - chat synthesis skipped (nothing retrieved scored above the relevance floor; no request was sent to the model).", minScore), hits, synthesized: false };
+  }
   return { text: extractiveAnswer(hits, question,
-    "Retrieval only (no chat model configured; set EMBER_API_BASE/EMBER_API_KEY/EMBER_CHAT_MODEL for synthesized answers)."), hits, synthesized: false };
+    "Retrieval only (no chat model configured; set EMBER_API_BASE/EMBER_API_KEY/EMBER_CHAT_MODEL for synthesized answers).", minScore), hits, synthesized: false };
 }

@@ -91,3 +91,44 @@ test("ask: zero-score chunks are never presented as sources", async () => {
   assert.ok(!r.text.includes("relevant chunks"), "no invented relevance");
   await fs.rm(dir, { recursive: true, force: true });
 });
+
+test("askMinScore: semantic floor 0.2 by default, 0 for lexical, env overrides", async () => {
+  const { askMinScore, ASK_MIN_SEMANTIC_SCORE } = await import("../src/core/ask.js");
+  assert.equal(askMinScore("local-wasm:Xenova/all-MiniLM-L6-v2", {}), ASK_MIN_SEMANTIC_SCORE);
+  assert.equal(askMinScore("hashing-v1", {}), 0);
+  assert.equal(askMinScore("local-wasm:anything", { EMBER_ASK_MIN_SCORE: "0.42" }), 0.42);
+});
+
+test("abstention: all hits below the semantic floor are not presented as sources", async () => {
+  const { engine } = await indexedTmp();
+  // Hashing engine floor is 0, so drive the semantic floor through a stub
+  // engine whose hits score under the calibrated 0.2 bound.
+  const weak = {
+    embedderKind: "local-wasm:Xenova/all-MiniLM-L6-v2",
+    async search() {
+      const mk = (score: number) => ({ score, chunk: { file: "vector.ts", startLine: 1, endLine: 5, symbol: "cosine", text: "export function cosine..." } });
+      return [mk(0.15), mk(0.11)];
+    },
+  } as unknown as EmberEngine;
+  const r = await answerQuestion(weak, "how to knit a scarf", 5);
+  assert.equal(r.synthesized, false);
+  assert.match(r.text, /No chunks scored high enough to treat as relevant/);
+  assert.match(r.text, /top score 0\.150/);
+  assert.doesNotMatch(r.text, /Retrieved sources for/);
+});
+
+test("abstention: synthesis is skipped when nothing clears the floor (no request sent)", async () => {
+  let called = 0;
+  const srv = http.createServer((req, res) => { called++; res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ choices: [{ message: { content: "answer [1]" } }] })); });
+  await new Promise<void>(r => srv.listen(0, "127.0.0.1", r));
+  const { port } = srv.address() as { port: number };
+  const client = new LlmClient({ base: `http://127.0.0.1:${port}`, apiKey: "k", chatModel: "m" });
+  const weak = {
+    embedderKind: "local-wasm:test-model",
+    async search() { return [{ score: 0.1, chunk: { file: "a.ts", startLine: 1, endLine: 2, text: "x" } }]; },
+  } as unknown as EmberEngine;
+  const r = await answerQuestion(weak, "anything", 5, { client });
+  assert.equal(called, 0, "no chat request may be sent when no chunk clears the floor");
+  assert.match(r.text, /chat synthesis skipped/);
+  await new Promise<void>(r => { srv.closeAllConnections?.(); srv.close(() => r()); });
+});
