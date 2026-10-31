@@ -234,3 +234,12 @@ test("ui: a second reindex during a running one is a 409, not a pile-up", async 
     } finally { await new Promise<void>(r => server.close(() => r())); }
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+test("ui: the served page script parses (template-literal escapes are load-bearing)", async () => {
+  const { PAGE } = await import("../src/ui/page.js");
+  const m = PAGE.match(/<script>([\s\S]*)<\/script>/);
+  assert.ok(m, "page has an inline script");
+  // Throws SyntaxError on invalid JS (e.g. a \\n that collapsed into a
+  // real newline inside a string when authored inside the TS template).
+  new Function(m![1]);
+});
