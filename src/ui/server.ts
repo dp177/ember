@@ -131,7 +131,10 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
       if (route === "/api/notes" && req.method === "POST") {
         let body = "";
         for await (const c of req) body += c;
-        const { text, tags } = JSON.parse(body || "{}");
+        let parsed: { text?: unknown; tags?: unknown };
+        try { parsed = JSON.parse(body || "{}"); }
+        catch { json(res, 400, { error: "request body is not valid JSON" }); return; }
+        const { text, tags } = parsed;
         if (!text || typeof text !== "string") { json(res, 400, { error: "text required" }); return; }
         const n = await new NoteStore(root).add(text, Array.isArray(tags) ? tags : []);
         json(res, 200, n);
@@ -141,7 +144,16 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
       if (route === "/api/file") {
         const rel = url.searchParams.get("path") ?? "";
         const real = await resolveInside(root, rel);
-        if (!real) { json(res, 403, { error: "path outside the indexed repo" }); return; }
+        if (!real) {
+          // Distinguish "does not exist" from "tried to escape the root"
+          // (including a symlink that resolves outside): both are refused,
+          // but they are not the same event.
+          const p = path.resolve(root, rel);
+          const inside = p === root || p.startsWith(root + path.sep);
+          const exists = inside && await fs.stat(p).then(() => true, () => false);
+          json(res, exists ? 403 : inside ? 404 : 403, { error: exists || !inside ? "path outside the indexed repo" : "file not found in the indexed repo" });
+          return;
+        }
         const content = await fs.readFile(real, "utf8");
         const start = Math.max(1, parseInt(url.searchParams.get("start") ?? "1", 10) || 1);
         const end = Math.min(parseInt(url.searchParams.get("end") ?? String(start + 40), 10) || start + 40, start + 200);

@@ -67,6 +67,9 @@ export class EmberEngine {
   }
 
   async search(query: string, k = 8): Promise<SearchHit[]> {
+    // An empty query has no signal: returning arbitrary top-scored chunks
+    // would dress up noise as results.
+    if (!query.trim()) return [];
     return this.hybrid ? this.searchHybrid(query, k) : this.searchVector(query, k);
   }
 

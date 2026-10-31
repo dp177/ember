@@ -130,7 +130,7 @@ dollars.
 
 ## Testing strategy
 
-55 tests, hermetic from a fresh clone (`npm test` builds first). Provider
+65 tests, hermetic from a fresh clone (`npm test` builds first). Provider
 behavior is tested against an in-process mock OpenAI-compatible server, so
 the LLM layer is fully verified with zero real calls. MCP is tested through
 real stdio sessions. The web UI has API-level workflow + security tests and
