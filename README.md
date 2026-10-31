@@ -16,8 +16,8 @@ slowly, expensively, and often wrong. Humans carry that context implicitly.
 ## What Ember does
 
 - `index_repo` — scans a repo, splits code into symbol-aware chunks, embeds
-  them, and builds a **pure-TypeScript HNSW** approximate nearest-neighbour
-  index. Everything persists in `<repo>/.ember/` — no database, no daemon.
+  them, and stores them for exact vector search. Everything persists in
+  `<repo>/.ember/` — no database, no daemon.
   Re-indexing is incremental: per-file hashes mean unchanged files keep their
   embeddings, only new/changed files are re-embedded, and deleted files drop
   out (`--full` forces a from-scratch rebuild). A `.emberignore` file keeps
@@ -170,9 +170,12 @@ routing, caching and discounts on the provider's side._
 - The corpus is frozen at the commit pinned in `eval/CORPUS_REF`, so these
   numbers are reproducible and comparable across changes. Reproduce:
   `node scripts/eval.mjs` (`EMBER_HYBRID=1` for the hybrid row).
-- **HNSW is exact HNSW, not a placeholder.** M=16, efConstruction=200,
-  diversity-preserving neighbor selection (paper alg. 4), serialized graph in
-  `.ember/`. Tests measure recall@10 vs brute force (>0.9 on clustered data).
+- **Default retrieval is an exact flat scan, not approximate.** The
+  pure-TypeScript HNSW graph (M=16, efConstruction=200, paper alg. 4 neighbor
+  selection, recall@10 >0.9 vs brute force in tests) is available as an
+  opt-in (`EMBER_HNSW=1` at index time) for very large repos. Measured on
+  the frozen eval corpus, flat and graph return identical results; the
+  graph's superlinear build cost is why it is not the default.
 - **Incremental indexing is hash-based.** `.ember/files.json` stores a sha1
   per file. Unchanged files keep their chunks and vectors; modified files are
   re-chunked and re-embedded; deleted files are removed. Switching embedders
@@ -213,9 +216,9 @@ where it is going.
 
 `demo-web/` is a static, read-only demo that runs Ember's real search engine
 in the browser: it fetches the published `.ember` index artifacts of this
-repo, rebuilds the HNSW graph client-side, and scores with the exact same
-code path as `EmberEngine.search` (parity is enforced by
-`test/demo-web.test.ts`). Retrieval is the default offline lexical mode —
+repo and scores with the exact same code path as `EmberEngine.search`,
+using the graph when the artifacts include one and an exact scan otherwise
+(parity is enforced by `test/demo-web.test.ts`). Retrieval is the default offline lexical mode —
 no data leaves the browser.
 
 ```bash
@@ -227,7 +230,7 @@ Deployed via GitHub Pages from the `gh-pages` branch.
 ## Tests
 
 ```bash
-npm test          # 65 tests, hermetic from a fresh clone: HNSW recall,
+npm test          # 79 tests, hermetic from a fresh clone: HNSW recall,
                   # chunking, scanner determinism, end-to-end index+search,
                   # notes persistence, incremental re-index, corrupt/torn
                   # data recovery, LLM provider behavior against a local

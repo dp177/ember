@@ -42,7 +42,7 @@ export async function indexRepo(
   let oldChunks: ChunkRecord[] = [];
   let oldHashes: FileHashMap = {};
   let oldMeta: IndexMeta | null = null;
-  let oldIndex: HnswIndex | null = null;
+  let oldVectors: Map<number, Float32Array> | null = null;
   if (!opts.full) {
     oldMeta = await store.readMeta();
     if (oldMeta) {
@@ -50,7 +50,7 @@ export async function indexRepo(
         try {
           const loaded = await store.load();
           oldChunks = loaded.chunks;
-          oldIndex = loaded.index;
+          oldVectors = loaded.vectors;
           oldHashes = (await store.loadFileHashes()) ?? {};
         } catch {
           log("existing index unreadable - falling back to a full re-index");
@@ -61,7 +61,7 @@ export async function indexRepo(
       }
     }
   }
-  const canReuse = oldIndex !== null && oldChunks.length > 0;
+  const canReuse = oldVectors !== null && oldChunks.length > 0;
 
   log(`scanning ${root} ...`);
   const files = await scanRepo(root);
@@ -76,7 +76,7 @@ export async function indexRepo(
       const nh = newHashes[c.file];
       const oh = oldHashes[c.file];
       if (!nh || !oh || nh.sha1 !== oh.sha1) continue; // deleted or modified
-      const v = oldIndex!.getVector(c.id);
+      const v = oldVectors!.get(c.id);
       if (!v) continue;
       kept.push(c);
       keptVectors.push(v);
@@ -89,11 +89,15 @@ export async function indexRepo(
   // Reassign sequential ids; vectors stay aligned with chunks.
   const chunks: ChunkRecord[] = [];
   const vectors: Float32Array[] = [];
-  const index = new HnswIndex(embedder.dim, { seed: 42 });
+  // The HNSW graph is an experimental opt-in (EMBER_HNSW=1). Default is a
+  // flat exact scan: measured parity with the graph on the frozen corpus,
+  // and it removes the superlinear graph-build cost that made large repos
+  // unindexable (measured: 15.9s for 1200 dim-1024 vectors, growing ~n^1.5).
+  const index = process.env.EMBER_HNSW === "1" ? new HnswIndex(embedder.dim, { seed: 42 }) : null;
   for (let i = 0; i < kept.length; i++) {
     chunks.push({ ...kept[i], id: chunks.length });
     vectors.push(keptVectors[i]);
-    index.add(chunks.length - 1, keptVectors[i]);
+    index?.add(chunks.length - 1, keptVectors[i]);
   }
 
   const fresh: CodeChunk[] = [];
@@ -109,7 +113,7 @@ export async function indexRepo(
       vs.forEach((v, j) => {
         chunks.push({ ...batch[j], id: chunks.length });
         vectors.push(v);
-        index.add(chunks.length - 1, v);
+        index?.add(chunks.length - 1, v);
       });
       if (fresh.length > BATCH) log(`embedded ${Math.min(i + BATCH, fresh.length)}/${fresh.length}`);
     }
@@ -125,6 +129,7 @@ export async function indexRepo(
     fileCount: files.length,
     createdAt: oldMeta?.createdAt ?? now,
     updatedAt: now,
+    indexMode: index ? "hnsw" : "flat",
   };
   await store.save(meta, chunks, vectors, index, newHashes);
   return {

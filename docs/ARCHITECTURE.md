@@ -1,16 +1,17 @@
 # Ember architecture
 
 One paragraph: Ember indexes a repo into symbol-aware chunks, embeds each
-chunk, stores everything under `<repo>/.ember/`, and answers queries through
-an HNSW approximate nearest-neighbour search plus (optionally) an
-OpenAI-compatible chat model that is only ever shown retrieved chunks. The
+chunk, stores everything under `<repo>/.ember/`, and answers queries with an
+exact vector scan (an opt-in HNSW graph for very large repos) plus
+(optionally) an OpenAI-compatible chat model that is only ever shown
+retrieved chunks. The
 same engine serves three frontends: the CLI, an MCP stdio server for coding
 agents, and a local web UI.
 
 ## Pipeline
 
 ```
-scan -> chunk -> embed -> HNSW -> persist (.ember/)
+scan -> chunk -> embed -> persist (.ember/)   [HNSW only with EMBER_HNSW=1]
                                  |
         +------------------------+------------------------+
         |                        |                        |
@@ -34,11 +35,19 @@ scan -> chunk -> embed -> HNSW -> persist (.ember/)
    - Optional `HttpEmbedder`: any OpenAI-compatible `/embeddings` endpoint.
      The returned dimension is validated against `EMBER_EMBED_DIM` - a
      mismatch fails loudly instead of corrupting the store.
-4. **Index** (`hnsw.ts`): pure-TypeScript HNSW (M=16, efConstruction=200,
-   cosine, diversity-preserving neighbor selection = paper algorithm 4).
-   Tests measure recall@10 against brute force (>0.9 on clustered data).
+4. **Index structure**: default is none - retrieval is an exact flat scan
+   over `vectors.f32`. Measured basis: identical results to the graph on the
+   frozen eval corpus; the graph build cost is superlinear (measured in the
+   dev sandbox: 15.9s for 1,200 dim-1024 random vectors, ~n^1.5), which made
+   a 2,102-file repo unindexable in-band; flat indexing of that repo
+   completes in seconds. An optional pure-TypeScript HNSW graph (`hnsw.ts`,
+   M=16, efConstruction=200, paper alg. 4 neighbor selection; recall@10 >0.9
+   vs brute force in tests) can be built with `EMBER_HNSW=1` at index time
+   for very large repos where per-query scan cost matters. Timings are
+   sandbox measurements, not universal latency promises.
 5. **Persist** (`store.ts`): `meta.json`, `chunks.jsonl`, `vectors.f32`
-   (row-major, aligned with chunk ids), `hnsw.json`, `files.json` (per-file
+   (row-major, aligned with chunk ids), `hnsw.json` (graph builds only),
+   `files.json` (per-file
    sha1 for incremental re-index), `notes.jsonl`, `usage.jsonl`. Saves are
    staged in a sibling directory and swapped in with two renames, so a
    crash mid-save cannot leave a half-written file set; a crash between
@@ -61,8 +70,9 @@ scan -> chunk -> embed -> HNSW -> persist (.ember/)
 
 ## Retrieval
 
-Default path (`engine.ts`): embed the query, pull `3k` HNSW candidates,
-rescore by exact dot product, add a capped filename-token boost, cut to k.
+Default path (`engine.ts`): embed the query, rank all chunk vectors by
+exact dot product (or pull `3k` graph candidates when the index was built
+with `EMBER_HNSW=1`), add a capped filename-token boost, cut to k.
 
 Experimental hybrid path (`--hybrid` / `EMBER_HYBRID=1`): fuse the vector
 ranking with a BM25 ranking (chunk text + filename tokens) using reciprocal

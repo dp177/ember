@@ -50,6 +50,8 @@ export interface IndexMeta {
   createdAt: string;
   updatedAt: string;
   generation?: string;
+  /** Retrieval structure: "flat" (exact scan, default) or "hnsw" (graph, opt-in). */
+  indexMode?: "flat" | "hnsw";
 }
 
 export interface FileHash { sha1: string; size: number; }
@@ -135,7 +137,7 @@ export class EmberStore {
     }
   }
 
-  async save(meta: IndexMeta, chunks: ChunkRecord[], vectors: Float32Array[], index: HnswIndex, fileHashes?: FileHashMap): Promise<void> {
+  async save(meta: IndexMeta, chunks: ChunkRecord[], vectors: Float32Array[], index: HnswIndex | null, fileHashes?: FileHashMap): Promise<void> {
     return this.withWriteLock(async () => {
     const parent = path.dirname(this.dir);
     const tmp = `${this.dir}.tmp-${process.pid}`;
@@ -161,7 +163,13 @@ export class EmberStore {
     const buf = Buffer.alloc(vectors.length * meta.dim * 4);
     vectors.forEach((v, i) => { Buffer.from(v.buffer, v.byteOffset, meta.dim * 4).copy(buf, i * meta.dim * 4); });
     await fs.writeFile(path.join(tmp, "vectors.f32"), buf);
-    await fs.writeFile(path.join(tmp, "hnsw.json"), JSON.stringify(index.toJSON()));
+    if (index) {
+      await fs.writeFile(path.join(tmp, "hnsw.json"), JSON.stringify(index.toJSON()));
+    } else {
+      // Flat mode: no graph. The staging copy of the old store may carry a
+      // stale hnsw.json whose ids no longer match - drop it.
+      await fs.rm(path.join(tmp, "hnsw.json"), { force: true });
+    }
     if (fileHashes) await fs.writeFile(path.join(tmp, "files.json"), JSON.stringify(fileHashes));
     // Swap: move the live set aside, move the staged set in, drop the old.
     await fs.rename(this.dir, backup).catch(() => {}); // no prior store on first save
@@ -195,7 +203,7 @@ export class EmberStore {
     }
   }
 
-  async load(): Promise<{ meta: IndexMeta; chunks: ChunkRecord[]; index: HnswIndex }> {
+  async load(): Promise<{ meta: IndexMeta; chunks: ChunkRecord[]; index: HnswIndex | null; vectors: Map<number, Float32Array> }> {
     await this.recoverIfNoWriter();
     try {
       return await this.loadOnce();
@@ -208,7 +216,7 @@ export class EmberStore {
     }
   }
 
-  private async loadOnce(): Promise<{ meta: IndexMeta; chunks: ChunkRecord[]; index: HnswIndex }> {
+  private async loadOnce(): Promise<{ meta: IndexMeta; chunks: ChunkRecord[]; index: HnswIndex | null; vectors: Map<number, Float32Array> }> {
     try {
       const genPath = path.join(this.dir, "generation");
       const genBefore = await fs.readFile(genPath, "utf8").then(s => s.trim(), () => null);
@@ -226,14 +234,20 @@ export class EmberStore {
       for (let i = 0; i < chunks.length; i++) {
         vectors.set(chunks[i].id, new Float32Array(buf.buffer.slice(buf.byteOffset + i * meta.dim * 4, buf.byteOffset + (i + 1) * meta.dim * 4)));
       }
-      const hnswJson = JSON.parse(await fs.readFile(path.join(this.dir, "hnsw.json"), "utf8"));
-      const index = HnswIndex.fromJSON(hnswJson, vectors);
+      // The graph is optional: flat (exact-scan) indexes have no hnsw.json.
+      let index: HnswIndex | null = null;
+      try {
+        const hnswJson = JSON.parse(await fs.readFile(path.join(this.dir, "hnsw.json"), "utf8"));
+        index = HnswIndex.fromJSON(hnswJson, vectors);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT" && !String(e).includes("ENOENT")) throw e;
+      }
       // Re-check identity: if a swap replaced the set mid-read, start over.
       const genAfter = await fs.readFile(genPath, "utf8").then(s => s.trim(), () => null);
       if (genBefore !== null && genAfter !== genBefore) {
         throw new Error(`torn read: generation changed ${genBefore} -> ${genAfter} during load`);
       }
-      return { meta, chunks, index };
+      return { meta, chunks, index, vectors };
     } catch (e) {
       throw new Error(
         `index store at ${this.dir} is corrupt or incomplete (${e instanceof Error ? e.message : String(e)}). Rebuild it: ember index --full`
