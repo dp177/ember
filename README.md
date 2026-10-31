@@ -31,8 +31,17 @@ slowly, expensively, and often wrong. Humans carry that context implicitly.
   validates every citation marker against the chunks it actually retrieved,
   strips bogus ones (and says it did), and passes model abstentions through
   untouched. Without a chat model, `ask` is honestly labeled retrieval-only:
-  ranked, line-numbered sources, and zero-score chunks are never presented
-  as relevant. If a synthesis call fails, the failure is disclosed and the
+  ranked, line-numbered sources. Ask only presents chunks above a
+  calibrated relevance floor as evidence (default 0.2 on the local
+  semantic path, `EMBER_ASK_MIN_SCORE` overrides; hybrid mode gates on
+  each hit's underlying vector cosine, since RRF rank scores are not
+  relevance; the lexical diagnostic path is retrieval-only by design -
+  no calibrated floor exists for it, so synthesis is unsupported there).
+  Below the floor, `ask` abstains and says the closest match is likely
+  unrelated; the floor filters weak evidence, it cannot prove relevance.
+  Only chunks that cleared the floor are sent to a configured chat model
+  as grounding, and when nothing clears, the synthesis call is skipped
+  entirely. If a synthesis call fails, the failure is disclosed and the
   extractive answer is served instead.
 - `repo_map` — entry points, hub files (most referenced), key symbols,
   languages. The orientation pass an agent otherwise burns minutes on.
@@ -105,6 +114,14 @@ Ember speaks MCP over stdio. Add it to your agent's MCP config:
 
 Then ask your agent to call `index_repo` once, and `repo_map` / `search_code`
 / `ask` whenever it would otherwise grope around the tree.
+
+## Local tuning knobs (optional, no provider needed)
+
+```bash
+export EMBER_EMBED_BATCH=4        # embed batch size; default is auto from free memory
+export EMBER_ASK_MIN_SCORE=0.25   # Ask evidence floor on the semantic path (default 0.2)
+export EMBER_CHECKPOINT_MS=15000  # checkpoint cadence in ms (default 30000)
+```
 
 ## LLM configuration (optional)
 
@@ -212,6 +229,13 @@ routing, caching and discounts on the provider's side._
   when you first enable local semantic embeddings. Ember itself sends no
   telemetry anywhere.
 
+- **Embedding memory scales with the machine.** The local embedder's
+  batch size is chosen from free memory at startup (4 below 3 GB free,
+  8 below 6 GB, else 16) and announced once; `EMBER_EMBED_BATCH`
+  overrides. On a 2-core 2 GB test machine the old fixed default was
+  killed by the OS out-of-memory killer during stress indexing; the
+  automatic ladder completes a 14,905-chunk rebuild at ~477 MB RSS
+  (run-scoped measurement, batch 4).
 - **A missing index is not "corruption".** First-run `ember search` says
   "no index at <repo>/.ember - run: ember index"; the corruption wording
   (with `--full` rebuild guidance) is reserved for a genuinely torn store.
@@ -228,8 +252,9 @@ routing, caching and discounts on the provider's side._
   diagnostic opt-out - never a silent fallback.
 - **Interrupted indexing resumes.** Embedding work is checkpointed to
   `.ember.checkpoint/` (a sibling of the live `.ember/`, which stays
-  searchable throughout) every 200 files or 2,000 chunks
-  (`EMBER_CHECKPOINT_FILES` / `EMBER_CHECKPOINT_CHUNKS` override). A rerun
+  searchable throughout) every 30 seconds and every 200 files or 2,000
+  chunks (`EMBER_CHECKPOINT_MS` / `EMBER_CHECKPOINT_FILES` /
+  `EMBER_CHECKPOINT_CHUNKS` override). A rerun
   validates the embedder identity and per-file hashes, keeps checkpointed
   work, and embeds only the rest; a model change or a torn checkpoint is
   discarded. A completed run or `ember index --full` clears it.
@@ -278,14 +303,16 @@ Deployed via GitHub Pages from the `gh-pages` branch.
 ## Tests
 
 ```bash
-npm test          # 79 tests, hermetic from a fresh clone: HNSW recall,
+npm test          # 114 tests, hermetic from a fresh clone: HNSW recall,
                   # chunking, scanner determinism, end-to-end index+search,
                   # notes persistence, incremental re-index, corrupt/torn
                   # data recovery, LLM provider behavior against a local
                   # mock OpenAI server (usage accounting, guards, retries,
                   # citation validation, fallback), hybrid scorer/fusion,
                   # real MCP stdio sessions, browser-demo parity, and the
-                  # web UI API + security (traversal, symlink, CSRF).
+                  # web UI API + security (traversal, symlink, CSRF),
+                  # Ask evidence gating per retrieval mode, and
+                  # CLI/MCP/package version agreement.
 npm run e2e:ui    # optional: drives the UI in a real local Chrome
 ```
 
