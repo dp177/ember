@@ -112,8 +112,10 @@ program.command("decisions")
     if (d.note) console.log(`note: ${d.note}`);
     console.log("## Decision-like commits");
     for (const c of d.decisions) console.log(`- ${c.date} ${c.hash} ${c.subject}`);
+    if (d.decisions.length === 0) console.log("- none found (heuristic: commit subjects mentioning decide/chose/instead/migrate/switch/revert/because/trade-off/deprecate/adopt/rfc/adr)");
     console.log("\n## ADR / decision documents");
     for (const f of d.adrFiles) console.log(`- ${f}`);
+    if (d.adrFiles.length === 0) console.log("- none found (looks for adr/decisions directories and *adr*/*decision* docs, depth <= 4)");
   });
 
 program.command("recent")
