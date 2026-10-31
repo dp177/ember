@@ -53,6 +53,11 @@ scan -> chunk -> embed -> HNSW -> persist (.ember/)
    process is reclaimed only when its recorded pid no longer exists;
    age alone never reclaims a live writer's lock, and cleanup removes
    only the lock instance the current call created (token-checked).
+   Known residual: a malformed lock is reclaimed only after a 30s
+   create grace, a heuristic - a process suspended mid-create longer
+   than that could lose its lock. This fails toward a blocked write
+   for the paused writer, not silent data loss, and is marked for
+   future hardening rather than claimed as a universal guarantee.
    Reads are hardened against torn/corrupt tails; the notes tail is
    repaired before append.
 

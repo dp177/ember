@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { embedderFromEnv } from "./core/embedder.js";
 import { EmberEngine } from "./core/engine.js";
 import { indexRepo } from "./core/indexer.js";
+import { checkFreshness } from "./core/freshness.js";
 import { EmberStore } from "./core/store.js";
 import { NoteStore } from "./core/notes.js";
 import { buildRepoMap, formatRepoMap } from "./core/repomap.js";
@@ -128,11 +129,20 @@ program.command("status")
   .option("--path <dir>", "repo root", ".")
   .action(async (opts) => {
     const root = rootOf(opts.path);
-    const meta = await new EmberStore(root).readMeta();
+    const store = new EmberStore(root);
+    const meta = await store.readMeta();
     if (!meta) { console.log(`no index at ${path.join(root, ".ember")} - run: ember index`); return; }
     console.log(`indexed: ${meta.chunkCount} chunks / ${meta.fileCount} files`);
     console.log(`embedder: ${meta.embedderKind} (dim ${meta.dim})`);
     console.log(`updated:  ${meta.updatedAt}`);
+    const fresh = await checkFreshness(store, root);
+    if (fresh) {
+      if (fresh.changed + fresh.added + fresh.deleted === 0) {
+        console.log(`fresh:    index matches the working tree (${fresh.checked} files checked)`);
+      } else {
+        console.log(`stale:    ${fresh.changed} changed, ${fresh.added} new, ${fresh.deleted} deleted since the last index - run: ember index`);
+      }
+    }
   });
 
 program.command("usage")
