@@ -52,6 +52,8 @@ export interface IndexMeta {
   generation?: string;
   /** Retrieval structure: "flat" (exact scan, default) or "hnsw" (graph, opt-in). */
   indexMode?: "flat" | "hnsw";
+  /** true when indexing stopped at the scanner file cap: the index is PARTIAL. */
+  capped?: boolean;
 }
 
 export interface FileHash { sha1: string; size: number; }

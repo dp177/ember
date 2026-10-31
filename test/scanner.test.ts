@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { scanRepo } from "../src/core/scanner.js";
+import { scanRepo, scanRepoCapped } from "../src/core/scanner.js";
 
 test(".github directory is indexed while .git is skipped", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-scan-"));
@@ -29,4 +29,20 @@ test("scan order is deterministic (byte-sorted by path) regardless of creation o
   const sorted = [...files].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
   assert.deepEqual(files, sorted);
   await fs.rm(dir, { recursive: true, force: true });
+});
+
+test("scanner cap: scanRepoCapped reports capped and stops at the limit", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-cap-"));
+  try {
+    for (let i = 0; i < 5; i++) await fs.writeFile(path.join(dir, `f${i}.ts`), `export const v${i} = ${i};\n`);
+    const r = await scanRepoCapped(dir, 3);
+    assert.equal(r.capped, true);
+    assert.equal(r.cap, 3);
+    assert.ok(r.files.length <= 3);
+    const full = await scanRepoCapped(dir);
+    assert.equal(full.capped, false);
+    assert.equal(full.files.length, 5);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });

@@ -21,7 +21,9 @@ scan -> chunk -> embed -> persist (.ember/)   [HNSW only with EMBER_HNSW=1]
 1. **Scan** (`scanner.ts`): deterministic walk (byte-sorted by path so chunk
    ids are reproducible), skipping dependencies, build output, binaries,
    oversized files, lockfiles, and anything in `.emberignore`. Language from
-   extension; 256 KB per-file cap; 4000-file total cap.
+   extension; 256 KB per-file cap; 4000-file total cap. Hitting the total
+   cap used to silently truncate the index; now indexing warns, meta.capped
+   records it, and `ember status` prints a "partial" line.
 2. **Chunk** (`chunker.ts`): symbol-aware - functions/classes/methods become
    chunks with their line ranges and symbol names; files without recognizable
    symbols fall back to overlapping windows. Chunks carry

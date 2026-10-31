@@ -5,7 +5,7 @@
 
 import { promises as fs } from "node:fs";
 import { createHash } from "node:crypto";
-import { scanRepo } from "./scanner.js";
+import { scanRepoCapped } from "./scanner.js";
 import { chunkFile, type CodeChunk } from "./chunker.js";
 import type { Embedder } from "./embedder.js";
 import { HnswIndex } from "./hnsw.js";
@@ -23,6 +23,8 @@ export interface IndexResult {
   embedded: number;
   /** true when an existing compatible index was reused */
   incremental: boolean;
+  /** true when the scan hit the file cap: the index is PARTIAL */
+  capped: boolean;
 }
 
 const sha1 = (s: string): string => createHash("sha1").update(s).digest("hex");
@@ -64,7 +66,9 @@ export async function indexRepo(
   const canReuse = oldVectors !== null && oldChunks.length > 0;
 
   log(`scanning ${root} ...`);
-  const files = await scanRepo(root);
+  const scan = await scanRepoCapped(root);
+  const files = scan.files;
+  if (scan.capped) log(`warning: file limit reached (${scan.cap}) - index is PARTIAL; larger repos are truncated at the scan cap`);
   const newHashes: FileHashMap = {};
   for (const f of files) newHashes[f.relPath] = { sha1: sha1(f.content), size: f.content.length };
 
@@ -130,6 +134,7 @@ export async function indexRepo(
     createdAt: oldMeta?.createdAt ?? now,
     updatedAt: now,
     indexMode: index ? "hnsw" : "flat",
+    capped: scan.capped,
   };
   await store.save(meta, chunks, vectors, index, newHashes);
   return {
@@ -139,5 +144,6 @@ export async function indexRepo(
     kept: kept.length,
     embedded: fresh.length,
     incremental: canReuse,
+    capped: scan.capped,
   };
 }

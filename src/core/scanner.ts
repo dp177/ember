@@ -43,7 +43,7 @@ const LANG_BY_EXT: Record<string, string> = {
 };
 
 const MAX_FILE_BYTES = 256 * 1024;
-const MAX_TOTAL_FILES = 4000;
+export const MAX_TOTAL_FILES = 4000;
 
 /** Optional <root>/.emberignore: one repo-relative path per line. A line
  * matches that exact file, or everything under that directory prefix.
@@ -59,25 +59,38 @@ async function loadEmberIgnore(root: string): Promise<string[]> {
 /** The same repo walk without reading file contents: for cheap drift
  * checks where reading every file would double query latency. */
 export async function scanRepoStat(root: string): Promise<ScannedFileStat[]> {
-  return (await collect(root, false)) as ScannedFileStat[];
+  return (await collect(root, false)).files as ScannedFileStat[];
 }
 
-export async function scanRepo(root: string): Promise<ScannedFile[]> {
-  return (await collect(root, true)) as ScannedFile[];
+export interface ScanResult {
+  files: ScannedFile[];
+  /** True when the walk stopped at the file cap: the index is PARTIAL. */
+  capped: boolean;
+  cap: number;
 }
 
-async function collect(root: string, readContent: boolean): Promise<(ScannedFile | ScannedFileStat)[]> {
+export async function scanRepo(root: string, maxFiles = MAX_TOTAL_FILES): Promise<ScannedFile[]> {
+  return (await collect(root, true, maxFiles)).files as ScannedFile[];
+}
+
+export async function scanRepoCapped(root: string, maxFiles = MAX_TOTAL_FILES): Promise<ScanResult> {
+  const r = await collect(root, true, maxFiles);
+  return { files: r.files as ScannedFile[], capped: r.capped, cap: maxFiles };
+}
+
+async function collect(root: string, readContent: boolean, maxFiles = MAX_TOTAL_FILES): Promise<{ files: (ScannedFile | ScannedFileStat)[]; capped: boolean }> {
   const out: (ScannedFile | ScannedFileStat)[] = [];
+  let capped = false;
   const ignored = await loadEmberIgnore(root);
   const isIgnored = (rel: string): boolean =>
     ignored.some(p => rel === p || rel.startsWith(p.replace(/\/$/, "") + "/"));
   async function walk(dir: string): Promise<void> {
-    if (out.length >= MAX_TOTAL_FILES) return;
+    if (out.length >= maxFiles) { capped = true; return; }
     let entries;
     try { entries = await fs.readdir(dir, { withFileTypes: true }); }
     catch { return; }
     for (const e of entries) {
-      if (out.length >= MAX_TOTAL_FILES) return;
+      if (out.length >= maxFiles) { capped = true; return; }
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) {
         // Exact ".git" only: startsWith(".git") would also skip ".github",
@@ -111,5 +124,5 @@ async function collect(root: string, readContent: boolean): Promise<(ScannedFile
   // so a stable byte-order sort keeps ids reproducible across runs, clones
   // and filesystems (readdir order is arbitrary).
   out.sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0));
-  return out;
+  return { files: out, capped };
 }

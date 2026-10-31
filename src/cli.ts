@@ -140,6 +140,7 @@ program.command("status")
     console.log(`indexed: ${meta.chunkCount} chunks / ${meta.fileCount} files`);
     console.log(`embedder: ${meta.embedderKind} (dim ${meta.dim})`);
     console.log(`updated:  ${meta.updatedAt}`);
+    if (meta.capped) console.log(`partial:  scan hit the file cap - the index covers only part of this repo`);
     const fresh = await checkFreshness(store, root);
     if (fresh) {
       if (fresh.changed + fresh.added + fresh.deleted === 0) {
