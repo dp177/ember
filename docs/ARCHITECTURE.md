@@ -135,6 +135,23 @@ Without a chat model, `ask` is labeled retrieval-only, excerpts are
 line-numbered, and zero-score chunks are dropped rather than presented as
 relevant.
 
+Weak-evidence gate: on the local semantic path, Ask applies a top-score
+floor (`ASK_MIN_SEMANTIC_SCORE = 0.2`, `EMBER_ASK_MIN_SCORE` overrides)
+before anything reaches synthesis. Context, the citation map and the
+Sources list consume only chunks that cleared the floor; when nothing
+clears, the chat call is skipped entirely (no request, no spend) and Ask
+explains that nothing qualified instead of presenting weak matches as
+sources. Calibration labels that travel with the number: the floor is
+derived from the benchmark's own probes (in-sample, 60 relevant /
+20 off-topic: zero false abstentions, 15/20 off-topic caught at 0.2), it
+is a weak-evidence gate - roughly a quarter of off-topic probes still
+pass - and it cannot prove answerability. Hybrid Ask gates on each hit's
+underlying cosine (carried as `vectorScore`) because RRF fusion scores do
+not separate; lexical scores overlap near-totally, so lexical Ask is
+retrieval-only and says synthesis is unsupported. A live one-model check
+(31 Oct, free tier) still found 1 of 6 off-topic probes leaking to
+synthesis - the gate is probabilistic, not a boundary.
+
 ## Provider client (`llm.ts`)
 
 One `LlmClient` for chat + embeddings: 60s timeout, a single retry with 1s
@@ -205,9 +222,10 @@ Indexing now checkpoints progress and a rerun resumes it:
 - Embedding proceeds file by file; a file's hash enters the checkpoint
   only after ALL its chunks are embedded, so the file is the atomic
   resume unit and a half-embedded file is simply redone.
-- A checkpoint is written every 200 files or 2,000 chunks
-  (`EMBER_CHECKPOINT_FILES` / `EMBER_CHECKPOINT_CHUNKS` override), staged
-  in a tmp directory and renamed into place.
+- A checkpoint is written every 200 files, 2,000 chunks or 30 seconds
+  (`EMBER_CHECKPOINT_FILES` / `EMBER_CHECKPOINT_CHUNKS` /
+  `EMBER_CHECKPOINT_MS` override), staged in a tmp directory and renamed
+  into place.
 - On the next run a checkpoint becomes the reuse baseline only when its
   embedder kind and dimension match the current embedder. kind carries
   the exact model id (`local-wasm:<model>`, `http-openai-compatible:<model>`;
@@ -229,9 +247,15 @@ Indexing now checkpoints progress and a rerun resumes it:
 
 ## Testing strategy
 
-80 tests, hermetic from a fresh clone (`npm test` builds first). Provider
-behavior is tested against an in-process mock OpenAI-compatible server, so
-the LLM layer is fully verified with zero real calls. MCP is tested through
+117 tests, hermetic from a fresh clone (`npm test` builds first): the
+default suite spawns test children with `EMBER_LEXICAL=1` so it downloads
+no model and passes with the network namespace disabled (loopback only).
+Real-model coverage is the explicit `EMBER_LIVE_TESTS=1` variant, which
+downloads the model once. Provider behavior is tested against an
+in-process mock OpenAI-compatible server, so the LLM layer is fully
+verified with zero real calls; one user-approved live run against a real
+free-tier endpoint is recorded in the project log (26/30 synthesized,
+observed cost $0.00), described in `docs/ROADMAP.md` (M2). MCP is tested through
 real stdio sessions. The web UI has API-level workflow + security tests and
 an opt-in real-Chrome e2e (`npm run e2e:ui`). The browser demo's parity with
 the engine is asserted by serving the demo over HTTP and comparing hits and

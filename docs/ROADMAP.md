@@ -42,16 +42,30 @@ retrieval quality first, then the interface, then proof.
       best measured configuration (verbatim 6/11/0.499, paraphrase
       5/10/0.452). Reproducible: EMBER_EVAL_EMBEDDER=local node scripts/eval.mjs.
 
-- [ ] Live provider verification (still blocked: needs an approved API
-      budget - the local path now covers semantic retrieval without one; a
-      budget is only needed for synthesized chat answers and for verifying
-      the HTTP provider path against real endpoints).
-- [ ] Verify embeddings + chat against OpenRouter with real models;
-      measure and report per-call token usage (provider-reported).
+- [x] Live synthesis verification, run once on 31 Oct with user approval
+      on a zero-price route (nvidia/nemotron-3-ultra-550b-a55b:free): the
+      30 frozen-corpus benchmark questions + 6 off-topic probes through
+      the real Ask path, retrieval fully local. 26/30 synthesized, 4
+      retrieval-only (3 own-gate, 1 clean 60 s timeout fallback), 0
+      harness errors; 21/26 synthesized answers cited an expected
+      ground-truth file (citation check, not answer correctness); 3
+      answers source-reviewed with core claims correct. Provider-reported
+      usage: 27 completions, 33,741 input + 19,089 output tokens, every
+      completion read back at total_cost $0.00; key usage and $0.00
+      account credits unchanged. Caveats: in-sample questions, 1/6
+      off-topic probes leaked to synthesis (the documented floor
+      weakness), one free model only - not evidence about paid tiers -
+      and a single run is not a reliability proof. No provider spending
+      cap was configured, so $0.00 is the observed outcome of that run,
+      not a standing guarantee; any future live run needs fresh route and
+      cap grounding.
+- [ ] Verify REMOTE embeddings against OpenRouter with real models
+      (deliberately not covered by the 31 Oct run, which kept retrieval
+      local per the approved scope); measure per-call token usage.
 - [ ] Re-run the retrieval sanity check with real embeddings; publish the
       before/after (same frozen corpus, verbatim + paraphrase rows).
-- [ ] Re-check current model IDs and pricing at verification time - do not
-      trust remembered ones.
+- [x] Re-check current model IDs and pricing at verification time - done
+      live against /api/v1/models immediately before the 31 Oct run.
 
 Spend discipline for the paid run (authority-critical):
 - EMBER_MAX_CALLS caps REQUEST COUNT, never dollars; an approved dollar
