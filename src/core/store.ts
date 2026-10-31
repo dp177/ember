@@ -23,11 +23,15 @@
  * Each saved set carries a generation id (meta.generation + generation
  * file); a torn read that mixes two sets is detected by generation
  * mismatch or consistency validation and retried once before failing.
- * A lock left by a crashed process is reclaimed when its pid is dead or
- * it is older than 10 minutes.
+ * A lock left by a crashed process is reclaimed only when its recorded
+ * pid no longer exists; age alone never reclaims a live writer's lock.
+ * After a crash, the next open (read or write) reclaims the dead lock
+ * and restores the backup; if the lock somehow blocks, the error names
+ * the lock file to remove.
  */
 
 import { promises as fs } from "node:fs";
+import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import { HnswIndex } from "./hnsw.js";
 import type { CodeChunk } from "./chunker.js";
@@ -49,7 +53,6 @@ export interface IndexMeta {
 export interface FileHash { sha1: string; size: number; }
 export type FileHashMap = Record<string, FileHash>;
 
-const LOCK_STALE_MS = 10 * 60 * 1000;
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 export class EmberStore {
@@ -67,29 +70,30 @@ export class EmberStore {
     return path.join(this.repoRoot, ".ember.lock");
   }
 
-  /** True while another process holds the write lock. */
-  private async writerActive(): Promise<boolean> {
-    try { await fs.access(this.lockPath); return true; } catch { return false; }
-  }
-
+  /** A lock is reclaimable only when its owner is provably gone: the file is
+   * unreadable/malformed, or the recorded pid no longer exists on this host
+   * (ESRCH). Age alone never reclaims a lock - a long index run must not
+   * admit a second writer. EPERM means the process exists for another user:
+   * alive, not stale. The residual race is pid reuse by an unrelated
+   * process, which keeps the lock until that process exits. */
   private async lockIsStale(): Promise<boolean> {
+    let raw: { pid?: number };
     try {
-      const raw = JSON.parse(await fs.readFile(this.lockPath, "utf8")) as { pid?: number; at?: number };
-      if (typeof raw.at === "number" && Date.now() - raw.at > LOCK_STALE_MS) return true;
-      if (typeof raw.pid === "number") {
-        try { process.kill(raw.pid, 0); return false; } catch { return true; }
-      }
-      return false;
-    } catch { return true; } // unreadable or malformed lock: treat as stale
+      raw = JSON.parse(await fs.readFile(this.lockPath, "utf8")) as { pid?: number };
+    } catch { return true; } // unreadable or malformed lock: no live owner
+    if (typeof raw.pid !== "number") return true;
+    try { process.kill(raw.pid, 0); return false; } // owner alive
+    catch (e) { return (e as NodeJS.ErrnoException).code === "ESRCH"; }
   }
 
   /** Serialize writers and recovery. Fails fast while another writer holds the lock. */
   private async withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    const token = randomBytes(8).toString("hex");
     let handle: fs.FileHandle | null = null;
     for (let attempt = 0; attempt < 2 && !handle; attempt++) {
       try {
         handle = await fs.open(this.lockPath, "wx");
-        await handle.writeFile(JSON.stringify({ pid: process.pid, at: Date.now() }));
+        await handle.writeFile(JSON.stringify({ pid: process.pid, at: Date.now(), token }));
       } catch (e) {
         const code = (e as NodeJS.ErrnoException).code;
         if (code === "EEXIST" && attempt === 0 && await this.lockIsStale()) {
@@ -97,7 +101,7 @@ export class EmberStore {
           continue;
         }
         if (code === "EEXIST") {
-          throw new Error("another ember process is writing this index; wait for it to finish and try again");
+          throw new Error(`another ember process is writing this index; wait for it to finish, or if no ember process is running, remove ${this.lockPath} and try again`);
         }
         throw e;
       }
@@ -106,17 +110,23 @@ export class EmberStore {
       return await fn();
     } finally {
       await handle!.close().catch(() => {});
-      await fs.rm(this.lockPath, { force: true });
+      // Remove only the lock this call created: if ours was reclaimed and a
+      // replacement now sits there, unlinking it would expose a live writer.
+      const held = await fs.readFile(this.lockPath, "utf8").then(s => {
+        try { return (JSON.parse(s) as { token?: string }).token === token; } catch { return false; }
+      }, () => false);
+      if (held) await fs.rm(this.lockPath, { force: true });
     }
   }
 
-  /** Recovery mutates the repo, so readers only run it while no writer is active. */
+  /** Recovery mutates the repo, so readers only run it while no live writer
+   * is active. withWriteLock reclaims a dead owner's lock, so a read-only
+   * open after a crash recovers on its own; a live writer's lock makes this
+   * a no-op (the writer owns recovery). */
   private async recoverIfNoWriter(): Promise<void> {
-    if (await this.writerActive()) return;
     try {
       await this.withWriteLock(() => this.recover());
     } catch (e) {
-      // A writer grabbed the lock between our check and acquisition: it owns recovery.
       if (e instanceof Error && e.message.includes("another ember process")) return;
       throw e;
     }

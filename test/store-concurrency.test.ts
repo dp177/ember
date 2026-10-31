@@ -112,3 +112,72 @@ test("concurrent saves and loads settle: every load returns one complete generat
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+/** Cross-process interleavings: real child processes hold or abandon the
+ * lock, so pid-liveness - not promises or timestamps - decides reclamation. */
+
+import { execFile } from "node:child_process";
+
+async function waitFor(p: string): Promise<void> {
+  for (let i = 0; i < 100; i++) {
+    try { await fs.access(p); return; } catch { await new Promise(r => setTimeout(r, 25)); }
+  }
+  throw new Error(`timed out waiting for ${p}`);
+}
+
+function spawnLockHolder(dir: string, mode: string) {
+  const child = execFile("node", ["test/fixtures/lock-holder.mjs", dir, mode]);
+  return child;
+}
+
+test("an old lock whose pid is ALIVE is never reclaimed (long index runs are safe)", async () => {
+  const dir = await freshRepo("ember-xproc-alive-");
+  const child = spawnLockHolder(dir, "hold-old");
+  try {
+    await waitFor(path.join(dir, ".ember.lock"));
+    await fs.writeFile(path.join(dir, "a.ts"), "export function alphaConc(): number { return 9; }\n");
+    await assert.rejects(
+      indexRepo(dir, new HashingEmbedder()),
+      /another ember process is writing/,
+      "a live writer's lock stands regardless of age",
+    );
+    assert.ok((await fs.readFile(path.join(dir, ".ember.lock"), "utf8")).includes('"token":"child"'),
+      "the live writer's lock file was not replaced or unlinked");
+  } finally {
+    child.kill("SIGKILL");
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a lock left by an exited process is reclaimed and the save proceeds", async () => {
+  const dir = await freshRepo("ember-xproc-dead-");
+  const child = spawnLockHolder(dir, "exit");
+  await new Promise<void>((resolve, reject) => { child.on("exit", () => resolve()); child.on("error", reject); });
+  await waitFor(path.join(dir, ".ember.lock"));
+  try {
+    await fs.writeFile(path.join(dir, "a.ts"), "export function alphaConc(): number { return 10; }\n");
+    await indexRepo(dir, new HashingEmbedder());
+    const loaded = await new EmberStore(dir).load();
+    assert.ok(loaded.chunks.length > 0, "dead writer's lock reclaimed, save succeeded");
+    await assert.rejects(fs.access(path.join(dir, ".ember.lock")), "lock cleaned up after save");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a process killed mid-swap: the next READ-ONLY open reclaims and recovers", async () => {
+  const dir = await freshRepo("ember-xproc-crash-");
+  const before = await new EmberStore(dir).load();
+  const child = spawnLockHolder(dir, "crash");
+  await new Promise<void>((resolve) => { child.on("exit", () => resolve()); });
+  await waitFor(path.join(dir, `.ember.backup-${child.pid}`));
+  try {
+    // No writer anywhere: a plain load must recover the backup on its own.
+    const loaded = await new EmberStore(dir).load();
+    assert.equal(loaded.chunks.length, before.chunks.length, "recovered set is complete");
+    assert.ok((await fs.readdir(dir)).includes(".ember"), "canonical dir restored by a read-only open");
+    assert.ok(!(await fs.readdir(dir)).some(e => e.startsWith(".ember.backup-")), "backup consumed");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

@@ -50,7 +50,9 @@ scan -> chunk -> embed -> HNSW -> persist (.ember/)
    (`meta.generation` plus a `generation` marker file), so a torn read
    mixing two sets is detected even when chunk and vector counts happen
    to match, and is retried once before failing. A lock left by a crashed
-   process is reclaimed when its pid is dead or older than 10 minutes.
+   process is reclaimed only when its recorded pid no longer exists;
+   age alone never reclaims a live writer's lock, and cleanup removes
+   only the lock instance the current call created (token-checked).
    Reads are hardened against torn/corrupt tails; the notes tail is
    repaired before append.
 
