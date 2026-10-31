@@ -11,6 +11,7 @@ import { EmberEngine } from "../core/engine.js";
 import { indexRepo } from "../core/indexer.js";
 import { EmberStore } from "../core/store.js";
 import { NoteStore } from "../core/notes.js";
+import { mtimeDrift } from "../core/freshness.js";
 import { buildRepoMap, formatRepoMap } from "../core/repomap.js";
 import { getCommits, getDecisions } from "../core/decisions.js";
 import { answerQuestion } from "../core/ask.js";
@@ -175,13 +176,15 @@ export async function startMcpServer(defaultRoot: string): Promise<void> {
 
   server.registerTool("index_status", {
     title: "Index status",
-    description: "Whether the repo is indexed, with what embedder, and when.",
+    description: "Whether the repo is indexed, with what embedder, when, and an mtime-heuristic hint of files modified since indexing.",
     inputSchema: { path: z.string().optional() },
   }, async ({ path: p }) => {
     const root = resolveRoot(p);
     const meta = await new EmberStore(root).readMeta();
     if (!meta) return text(`no index at ${root}/.ember - run index_repo first`);
-    return text(`indexed: ${meta.chunkCount} chunks / ${meta.fileCount} files, embedder=${meta.embedderKind} dim=${meta.dim}, updated ${meta.updatedAt}`);
+    const drift = await mtimeDrift(new EmberStore(root), root).catch(() => null);
+    const stale = drift && drift > 0 ? `, ${drift} file(s) modified since indexing (mtime heuristic - may be stale; re-run index_repo to refresh)` : "";
+    return text(`indexed: ${meta.chunkCount} chunks / ${meta.fileCount} files, embedder=${meta.embedderKind} dim=${meta.dim}, updated ${meta.updatedAt}${stale}`);
   });
 
   await server.connect(new StdioServerTransport());

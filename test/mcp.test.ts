@@ -152,3 +152,23 @@ test("MCP stdio: cached engine stays fresh across external re-index and delete",
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test("MCP stdio: index_status carries the mtime staleness hint", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-mcp-"));
+  await fs.writeFile(path.join(dir, "limiter.ts"), "export class Bucket { allow(): boolean { return true } }\n");
+  const client = new McpTestClient(dir);
+  try {
+    await handshake(client);
+    await client.call("tools/call", { name: "index_repo", arguments: {} });
+    const clean = await client.call("tools/call", { name: "index_status", arguments: {} });
+    assert.match(clean.result.content[0].text, /indexed: \d+ chunks/);
+    assert.doesNotMatch(clean.result.content[0].text, /may be stale/);
+    const future = new Date(Date.now() + 3600_000);
+    await fs.utimes(path.join(dir, "limiter.ts"), future, future);
+    const stale = await client.call("tools/call", { name: "index_status", arguments: {} });
+    assert.match(stale.result.content[0].text, /1 file\(s\) modified since indexing.*may be stale/);
+  } finally {
+    client.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

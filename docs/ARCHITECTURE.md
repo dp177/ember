@@ -160,10 +160,13 @@ Ember never refuses to answer on a stale index.
 
 `ember search` adds a cheaper live hint: a stat-only walk (no file
 contents read) counts files whose mtime is newer than the last index
-save and prints a one-line "may be stale" note when any drift. mtime is
-a heuristic - a touch without an edit counts, a rewrite with a preserved
-mtime does not - so the note can be wrong in both directions; the status
-command remains the hash-accurate check.
+save and prints a one-line "may be stale" note when any drift; the web
+UI status bar and the MCP index_status tool surface the same count.
+mtime is a heuristic: a touch without an edit counts; a rewrite with a
+preserved mtime (cp -p, tar extraction) does not; a deleted file leaves
+nothing to stat; a new file backdated before the index save is invisible
+too. The note can be wrong in both directions; the status command
+remains the hash-accurate check.
 
 ## Testing strategy
 
