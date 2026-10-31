@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { embedderFromEnv } from "./core/embedder.js";
 import { EmberEngine } from "./core/engine.js";
 import { indexRepo } from "./core/indexer.js";
-import { checkFreshness } from "./core/freshness.js";
+import { checkFreshness, mtimeDrift } from "./core/freshness.js";
 import { EmberStore } from "./core/store.js";
 import { NoteStore } from "./core/notes.js";
 import { buildRepoMap, formatRepoMap } from "./core/repomap.js";
@@ -43,11 +43,16 @@ program.command("search <query>")
   .option("--path <dir>", "repo root", ".")
   .option("--hybrid", "experimental: fuse vector ranking with BM25 (EMBER_HYBRID=1)", false)
   .action(async (query, opts) => {
-    const engine = await EmberEngine.load(rootOf(opts.path), embedderFromEnv(), hybridOf(opts));
+    const root = rootOf(opts.path);
+    const engine = await EmberEngine.load(root, embedderFromEnv(), hybridOf(opts));
     const hits = await engine.search(query, parseInt(opts.k, 10));
     for (const [i, h] of hits.entries()) {
       console.log(`\n[${i + 1}] ${h.chunk.file}:${h.chunk.startLine}-${h.chunk.endLine}${h.chunk.symbol ? ` (${h.chunk.symbol})` : ""}  score=${h.score.toFixed(3)}`);
       console.log(h.chunk.text.split("\n").slice(0, 8).join("\n"));
+    }
+    const drift = await mtimeDrift(new EmberStore(root), root).catch(() => null);
+    if (drift && drift > 0) {
+      console.log(`\nnote: ${drift} file(s) modified since the last index (mtime) - results may be stale; run: ember index`);
     }
   });
 

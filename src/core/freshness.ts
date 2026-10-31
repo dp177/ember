@@ -4,7 +4,7 @@
  * is the same signal incremental indexing uses, surfaced to the user.
  */
 import { createHash } from "node:crypto";
-import { scanRepo } from "./scanner.js";
+import { scanRepo, scanRepoStat } from "./scanner.js";
 import type { EmberStore } from "./store.js";
 
 export interface Freshness {
@@ -31,4 +31,21 @@ export async function checkFreshness(store: EmberStore, root: string): Promise<F
   let deleted = 0;
   for (const p of Object.keys(indexed)) if (!seen.has(p)) deleted++;
   return { checked: files.length, changed, added, deleted };
+}
+
+/**
+ * Cheap drift signal for the query path: how many scanned files carry an
+ * mtime after the last index save. mtime is a heuristic - a touch without
+ * an edit counts, a rewrite with a preserved mtime does not - so this is
+ * a "may be stale" hint, never a verdict. Full hash truth lives in
+ * checkFreshness (ember status).
+ */
+export async function mtimeDrift(store: EmberStore, root: string): Promise<number | null> {
+  const meta = await store.readMeta();
+  if (!meta?.updatedAt) return null;
+  const since = Date.parse(meta.updatedAt);
+  const files = await scanRepoStat(root);
+  let n = 0;
+  for (const f of files) if (f.mtimeMs > since) n++;
+  return n;
 }

@@ -14,6 +14,13 @@ export interface ScannedFile {
   content: string;
 }
 
+/** Stat-only view of a scanned file (no content read). */
+export interface ScannedFileStat {
+  relPath: string;
+  size: number;
+  mtimeMs: number;
+}
+
 const SKIP_DIRS = new Set([
   "node_modules", ".git", ".hg", ".svn", "dist", "build", "out", "target",
   "vendor", "__pycache__", ".next", ".nuxt", ".cache", "coverage", ".idea",
@@ -49,8 +56,18 @@ async function loadEmberIgnore(root: string): Promise<string[]> {
   } catch { return []; }
 }
 
+/** The same repo walk without reading file contents: for cheap drift
+ * checks where reading every file would double query latency. */
+export async function scanRepoStat(root: string): Promise<ScannedFileStat[]> {
+  return (await collect(root, false)) as ScannedFileStat[];
+}
+
 export async function scanRepo(root: string): Promise<ScannedFile[]> {
-  const out: ScannedFile[] = [];
+  return (await collect(root, true)) as ScannedFile[];
+}
+
+async function collect(root: string, readContent: boolean): Promise<(ScannedFile | ScannedFileStat)[]> {
+  const out: (ScannedFile | ScannedFileStat)[] = [];
   const ignored = await loadEmberIgnore(root);
   const isIgnored = (rel: string): boolean =>
     ignored.some(p => rel === p || rel.startsWith(p.replace(/\/$/, "") + "/"));
@@ -75,10 +92,15 @@ export async function scanRepo(root: string): Promise<ScannedFile[]> {
         let st;
         try { st = await fs.stat(abs); } catch { continue; }
         if (st.size === 0 || st.size > MAX_FILE_BYTES) continue;
+        const relPath = path.relative(root, abs);
+        if (!readContent) {
+          if (isIgnored(relPath)) continue;
+          out.push({ relPath, size: st.size, mtimeMs: st.mtimeMs });
+          continue;
+        }
         let content: string;
         try { content = await fs.readFile(abs, "utf8"); } catch { continue; }
         if (content.indexOf("\0") !== -1) continue; // binary sniff
-        const relPath = path.relative(root, abs);
         if (isIgnored(relPath)) continue;
         out.push({ relPath, absPath: abs, language, size: st.size, content });
       }

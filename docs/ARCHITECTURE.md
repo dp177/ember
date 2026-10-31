@@ -151,9 +151,23 @@ dollars.
 - **The browser demo** is static and read-only: it fetches this repo's
   published index artifacts and runs the same search code client-side.
 
+## Freshness
+
+`ember status` compares the live tree against the indexed per-file hashes
+(the same signal incremental indexing trusts) and reports changed, added
+and deleted counts or a fresh confirmation. It is a report, not a gate:
+Ember never refuses to answer on a stale index.
+
+`ember search` adds a cheaper live hint: a stat-only walk (no file
+contents read) counts files whose mtime is newer than the last index
+save and prints a one-line "may be stale" note when any drift. mtime is
+a heuristic - a touch without an edit counts, a rewrite with a preserved
+mtime does not - so the note can be wrong in both directions; the status
+command remains the hash-accurate check.
+
 ## Testing strategy
 
-65 tests, hermetic from a fresh clone (`npm test` builds first). Provider
+80 tests, hermetic from a fresh clone (`npm test` builds first). Provider
 behavior is tested against an in-process mock OpenAI-compatible server, so
 the LLM layer is fully verified with zero real calls. MCP is tested through
 real stdio sessions. The web UI has API-level workflow + security tests and

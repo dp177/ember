@@ -35,3 +35,20 @@ test("freshness: clean tree after index, then changed/added/deleted counted exac
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test("mtimeDrift: zero right after indexing, counts future-mtime files, null without index", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-drift-"));
+  try {
+    const { mtimeDrift } = await import("../src/core/freshness.js");
+    const store = new EmberStore(dir);
+    assert.equal(await mtimeDrift(store, dir), null, "no index -> no signal");
+    await fs.writeFile(path.join(dir, "a.ts"), "export function alphaDrift(): number { return 1; }\n");
+    await indexRepo(dir, new HashingEmbedder());
+    assert.equal(await mtimeDrift(store, dir), 0, "clean tree after index");
+    const future = new Date(Date.now() + 3600_000);
+    await fs.utimes(path.join(dir, "a.ts"), future, future);
+    assert.equal(await mtimeDrift(store, dir), 1, "one touched file counted");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
