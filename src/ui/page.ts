@@ -103,11 +103,15 @@ $("#reindexBtn").addEventListener("click", async () => {
   const tick = async () => {
     try {
       const s = await api("/api/index-status");
-      if (s.lines && s.lines.length) prog.textContent = s.lines.join("\\n");
+      if (s.lines && s.lines.length) { prog.textContent = s.lines.join("\\n"); prog.scrollTop = prog.scrollHeight; }
       if (!s.running) {
         polling = false;
         if (s.error) prog.textContent += "\\nindexing failed: " + s.error;
-        else if (s.result) prog.textContent += "\\ndone: indexed " + s.result.chunks + " chunks from " + s.result.files + " files";
+        else if (s.result) {
+          prog.textContent += "\\ndone: indexed " + s.result.chunks + " chunks from " + s.result.files + " files";
+          if (typeof s.result.embedded === "number")
+            prog.textContent += " (kept " + s.result.kept + ", reused " + s.result.reused + ", newly embedded " + s.result.embedded + ")";
+        }
         btn.disabled = false;
         status();
         return;

@@ -125,11 +125,11 @@ test("embedding progress is logged between checkpoints (log-only, no checkpoint 
     process.env.EMBER_CHECKPOINT_FILES = "1000"; // no checkpoint this run
     const logs: string[] = [];
     const r = await indexRepo(dir, new HashingEmbedder(), m => logs.push(m));
-    const progress = logs.filter(m => /^embedded \d+\/\d+ chunks \(\d+\/\d+ files\)$/.test(m));
+    const progress = logs.filter(m => /^processed \d+\/\d+ chunks \(\d+\/\d+ files, \d+ newly embedded\)$/.test(m));
     assert.deepEqual(progress, [
-      "embedded 2/6 chunks (2/6 files)",
-      "embedded 4/6 chunks (4/6 files)",
-      "embedded 6/6 chunks (6/6 files)",
+      "processed 2/6 chunks (2/6 files, 2 newly embedded)",
+      "processed 4/6 chunks (4/6 files, 4 newly embedded)",
+      "processed 6/6 chunks (6/6 files, 6 newly embedded)",
     ], "progress lines at the configured cadence, including completion");
     assert.ok(!logs.some(m => m.includes("checkpoint saved")), "no checkpoint at this cadence");
     assert.ok(!(await fs.stat(`${dir}/.ember.checkpoint`).then(() => true, () => false)), "no checkpoint dir written");
@@ -147,11 +147,11 @@ test("default cadence: early first checkpoint at 50 files, progress every 100, c
     for (let i = 0; i < 205; i++) await fs.writeFile(path.join(dir, `f${i}.ts`), `export function fn${i}(): number { return ${i}; }\n`);
     const logs: string[] = [];
     await indexRepo(dir, new HashingEmbedder(), m => logs.push(m));
-    const progress = logs.filter(m => /^embedded \d+\/\d+ chunks \(\d+\/\d+ files\)( - checkpoint saved)?$/.test(m));
+    const progress = logs.filter(m => /^processed \d+\/\d+ chunks \(\d+\/\d+ files, \d+ newly embedded\)( - checkpoint saved)?$/.test(m));
     assert.deepEqual(progress, [
-      "embedded 50/205 chunks (50/205 files) - checkpoint saved",
-      "embedded 100/205 chunks (100/205 files)",
-      "embedded 200/205 chunks (200/205 files) - checkpoint saved",
+      "processed 50/205 chunks (50/205 files, 50 newly embedded) - checkpoint saved",
+      "processed 100/205 chunks (100/205 files, 100 newly embedded)",
+      "processed 200/205 chunks (200/205 files, 200 newly embedded) - checkpoint saved",
     ], "first checkpoint lands at 50 files so a killed run resumes near the death point; then 100-file progress and 200-file checkpoints");
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

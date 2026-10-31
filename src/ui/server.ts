@@ -29,7 +29,7 @@ export interface UiOptions {
 }
 
 /** Runs one reindex and reports progress lines; resolves with the result. */
-export type IndexRunner = (onLine: (line: string) => void, full: boolean) => Promise<{ chunks: number; files: number }>;
+export type IndexRunner = (onLine: (line: string) => void, full: boolean) => Promise<{ chunks: number; files: number; kept?: number; reused?: number; embedded?: number }>;
 
 /** Production reindex runs as a child process. An in-process run shares the
  * server's address space, so a large embed phase can take the whole UI down
