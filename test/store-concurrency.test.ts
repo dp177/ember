@@ -181,3 +181,35 @@ test("a process killed mid-swap: the next READ-ONLY open reclaims and recovers",
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test("a freshly-created incomplete lock fails closed (create-in-progress window)", async () => {
+  const dir = await freshRepo("ember-partial-lock-");
+  try {
+    // Exclusive create landed, content not yet written: 0-byte lock, fresh mtime.
+    await fs.writeFile(path.join(dir, ".ember.lock"), "");
+    await fs.writeFile(path.join(dir, "a.ts"), "export function alphaConc(): number { return 11; }\n");
+    await assert.rejects(
+      indexRepo(dir, new HashingEmbedder()),
+      /another ember process is writing/,
+      "unknown ownership must not be taken as a dead lock",
+    );
+    assert.equal(await fs.readFile(path.join(dir, ".ember.lock"), "utf8"), "", "unidentified lock left untouched");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("an incomplete lock clearly past the create window is reclaimed", async () => {
+  const dir = await freshRepo("ember-partial-old-");
+  try {
+    const lock = path.join(dir, ".ember.lock");
+    await fs.writeFile(lock, "");
+    const old = new Date(Date.now() - 120_000);
+    await fs.utimes(lock, old, old);
+    await fs.writeFile(path.join(dir, "a.ts"), "export function alphaConc(): number { return 12; }\n");
+    await indexRepo(dir, new HashingEmbedder());
+    assert.ok((await new EmberStore(dir).load()).chunks.length > 0, "save proceeds past the create grace");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

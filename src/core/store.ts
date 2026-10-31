@@ -24,7 +24,9 @@
  * file); a torn read that mixes two sets is detected by generation
  * mismatch or consistency validation and retried once before failing.
  * A lock left by a crashed process is reclaimed only when its recorded
- * pid no longer exists; age alone never reclaims a live writer's lock.
+ * pid no longer exists; age alone never reclaims a live writer's lock,
+ * and an unidentifiable lock fails closed rather than admitting a
+ * second writer.
  * After a crash, the next open (read or write) reclaims the dead lock
  * and restores the backup; if the lock somehow blocks, the error names
  * the lock file to remove.
@@ -70,33 +72,41 @@ export class EmberStore {
     return path.join(this.repoRoot, ".ember.lock");
   }
 
-  /** A lock is reclaimable only when its owner is provably gone: the file is
-   * unreadable/malformed, or the recorded pid no longer exists on this host
-   * (ESRCH). Age alone never reclaims a lock - a long index run must not
-   * admit a second writer. EPERM means the process exists for another user:
-   * alive, not stale. The residual race is pid reuse by an unrelated
-   * process, which keeps the lock until that process exits. */
-  private async lockIsStale(): Promise<boolean> {
+  /** Classify the lock. Reclaim ("dead") only when the owner is provably
+   * gone: recorded pid no longer exists on this host (ESRCH), or the file
+   * is malformed/empty AND older than the create grace - a writer creates
+   * the file before its content lands, so a fresh malformed lock is a
+   * create-in-progress, not a corpse. Anything unknown (unreadable,
+   * EPERM = alive for another user, pid reuse) fails closed as "live":
+   * never admit a second writer on a guess. */
+  private static readonly LOCK_CREATE_GRACE_MS = 30_000;
+
+  private async lockState(): Promise<"live" | "dead"> {
+    let mtimeMs: number;
+    try { mtimeMs = (await fs.stat(this.lockPath)).mtimeMs; }
+    catch { return "dead"; } // no lock
+    const pastGrace = Date.now() - mtimeMs > EmberStore.LOCK_CREATE_GRACE_MS;
     let raw: { pid?: number };
     try {
       raw = JSON.parse(await fs.readFile(this.lockPath, "utf8")) as { pid?: number };
-    } catch { return true; } // unreadable or malformed lock: no live owner
-    if (typeof raw.pid !== "number") return true;
-    try { process.kill(raw.pid, 0); return false; } // owner alive
-    catch (e) { return (e as NodeJS.ErrnoException).code === "ESRCH"; }
+    } catch {
+      return pastGrace ? "dead" : "live"; // malformed: fail closed while fresh
+    }
+    if (typeof raw.pid !== "number") return pastGrace ? "dead" : "live";
+    try { process.kill(raw.pid, 0); return "live"; }
+    catch (e) { return (e as NodeJS.ErrnoException).code === "ESRCH" ? "dead" : "live"; }
   }
 
   /** Serialize writers and recovery. Fails fast while another writer holds the lock. */
   private async withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
     const token = randomBytes(8).toString("hex");
-    let handle: fs.FileHandle | null = null;
-    for (let attempt = 0; attempt < 2 && !handle; attempt++) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        handle = await fs.open(this.lockPath, "wx");
-        await handle.writeFile(JSON.stringify({ pid: process.pid, at: Date.now(), token }));
+        await fs.writeFile(this.lockPath, JSON.stringify({ pid: process.pid, at: Date.now(), token }), { flag: "wx" });
+        break;
       } catch (e) {
         const code = (e as NodeJS.ErrnoException).code;
-        if (code === "EEXIST" && attempt === 0 && await this.lockIsStale()) {
+        if (code === "EEXIST" && attempt === 0 && (await this.lockState()) === "dead") {
           await fs.rm(this.lockPath, { force: true });
           continue;
         }
@@ -109,7 +119,6 @@ export class EmberStore {
     try {
       return await fn();
     } finally {
-      await handle!.close().catch(() => {});
       // Remove only the lock this call created: if ours was reclaimed and a
       // replacement now sits there, unlinking it would expose a live writer.
       const held = await fs.readFile(this.lockPath, "utf8").then(s => {
