@@ -101,6 +101,17 @@ source read-only and jailed to the indexed root (traversal, absolute paths
 and symlink escapes are refused), and rejects cross-origin mutations. Deep
 links: `http://127.0.0.1:4173/#q=...&go=search|ask`.
 
+The Load repo field loads a **public GitHub repo**: paste
+`github.com/owner/repo` and Ember shallow-clones it into
+`~/.ember/remotes/`, switches the active root, and indexes it with the same
+local embedder and live progress - then search/ask run against the loaded
+repo (the status bar shows `github: owner/repo` vs `local: <dir>`). Loading
+again fetches the latest default branch. The URL parser is the security
+boundary and it is deliberately narrow: github.com only, no SSH/file URLs,
+no credentials in URLs, no deep links - private repos simply fail the clone
+(`GIT_TERMINAL_PROMPT=0`, never a prompt, never a credential) and the error
+surfaces in the progress log.
+
 ## Use it from your coding agent (MCP)
 
 Ember speaks MCP over stdio. Add it to your agent's MCP config:

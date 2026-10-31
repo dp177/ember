@@ -26,6 +26,8 @@ export interface UiOptions {
   embedder?: import("../core/embedder.js").Embedder;
   /** Test override for the reindex execution; production uses a child process. */
   indexRunner?: IndexRunner;
+  /** Test override for loading a GitHub repo; production clones with git. */
+  repoLoader?: (url: string, log: (m: string) => void) => Promise<{ label: string; dir: string }>;
 }
 
 /** Runs one reindex and reports progress lines; resolves with the result. */
@@ -122,6 +124,10 @@ interface IndexRun { startedAt: string; lines: string[]; done: boolean; error?: 
 
 export function createUiServer(root: string, opts: UiOptions = {}): http.Server {
   let indexRun: IndexRun | null = null;
+  // The active root switches when the user loads a GitHub repo; every
+  // request-scoped use below reads activeRoot, never the original root.
+  let activeRoot = root;
+  let activeSource: { kind: "local" | "github"; label: string } = { kind: "local", label: path.basename(root) || root };
   if (!opts.embedder) {
     const choice = embedderChoiceFromEnv(process.env, JsonlUsageLogger.forRepo(root));
     if (choice.warning) console.error(`note: ${choice.warning}`);
@@ -131,7 +137,7 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
   // (sharedClientFromEnv): EMBER_MAX_CALLS and usage accounting aggregate
   // across requests, and its serialized queue keeps concurrent asks from
   // fanning out to the provider.
-  const client = (): LlmClient | null => sharedClientFromEnv(process.env, JsonlUsageLogger.forRepo(root));
+  const client = (): LlmClient | null => sharedClientFromEnv(process.env, JsonlUsageLogger.forRepo(activeRoot));
 
   // Cache the loaded engine and its embedder across requests: with the
   // semantic default, a per-request load would reload the WASM model and
@@ -139,9 +145,9 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
   // re-index (CLI, another agent) honest; a failed load is never cached.
   let cached: { stamp: string; engine: Promise<EmberEngine> } | null = null;
   const engineFor = async (): Promise<EmberEngine> => {
-    const stamp = await storeStamp(root);
+    const stamp = await storeStamp(activeRoot);
     if (cached && stamp !== null && cached.stamp === stamp) return cached.engine;
-    const p = loadEngine(root, opts);
+    const p = loadEngine(activeRoot, opts);
     p.catch(() => { if (cached?.engine === p) cached = null; });
     cached = { stamp: stamp ?? "missing", engine: p };
     return p;
@@ -174,14 +180,62 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
       }
 
       if (route === "/api/status") {
-        const meta = await new EmberStore(root).readMeta();
+        const meta = await new EmberStore(activeRoot).readMeta();
         // Cheap mtime heuristic (see core/freshness.ts): can be wrong in
         // both directions, so the UI phrases it as "may be stale".
-        const drift = meta ? await mtimeDrift(new EmberStore(root), root).catch(() => null) : null;
-        const cp = await readCheckpointInfo(root);
+        const drift = meta ? await mtimeDrift(new EmberStore(activeRoot), activeRoot).catch(() => null) : null;
+        const cp = await readCheckpointInfo(activeRoot);
+        const base = { source: activeSource };
         json(res, 200, meta
-          ? { indexed: true, chunks: meta.chunkCount, files: meta.fileCount, embedder: meta.embedderKind, dim: meta.dim, updatedAt: meta.updatedAt, hybrid: opts.hybrid ?? false, modifiedSinceIndex: drift, resumableCheckpoint: cp ?? undefined }
-          : { indexed: false, resumableCheckpoint: cp ?? undefined });
+          ? { ...base, indexed: true, chunks: meta.chunkCount, files: meta.fileCount, embedder: meta.embedderKind, dim: meta.dim, updatedAt: meta.updatedAt, hybrid: opts.hybrid ?? false, modifiedSinceIndex: drift, resumableCheckpoint: cp ?? undefined }
+          : { ...base, indexed: false, resumableCheckpoint: cp ?? undefined });
+        return;
+      }
+
+      // Load a PUBLIC GitHub repo: clone (shallow) into the local cache,
+      // switch the active root, index it. Same IndexRun machinery as
+      // reindex, so the page's normal progress polling covers the whole
+      // load; clone failures are reported, never retried blindly.
+      if (route === "/api/load-repo" && req.method === "POST") {
+        if (indexRun && !indexRun.done) {
+          json(res, 409, { error: "an index run is already in progress - poll /api/index-status", running: true });
+          return;
+        }
+        let body = "";
+        for await (const c of req) body += c;
+        let repoUrl = "";
+        try { repoUrl = String(JSON.parse(body || "{}").url ?? ""); } catch { /* handled below */ }
+        const { parseGitHubUrl, remoteCacheDir, cloneOrUpdate } = await import("./github.js");
+        try { parseGitHubUrl(repoUrl); } catch (e) {
+          json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+          return;
+        }
+        const loader = opts.repoLoader ?? (async (u: string, log: (m: string) => void) => {
+          const repo = parseGitHubUrl(u);
+          const dir = remoteCacheDir(repo);
+          await cloneOrUpdate(repo, dir, log);
+          return { label: repo.label, dir };
+        });
+        const run: IndexRun = { startedAt: new Date().toISOString(), lines: [], done: false };
+        indexRun = run;
+        void (async () => {
+          const log = (m: string) => { run.lines.push(m); if (run.lines.length > 100) run.lines.splice(0, run.lines.length - 100); };
+          try {
+            const loaded = await loader(repoUrl, log);
+            activeRoot = loaded.dir;
+            activeSource = { kind: "github", label: loaded.label };
+            cached = null;
+            log(`indexing ${loaded.label}...`);
+            const runner = opts.indexRunner ?? childIndexRunner(activeRoot, opts);
+            run.result = await runner(log, false);
+            cached = null; // next request loads the fresh index
+          } catch (e) {
+            run.error = e instanceof Error ? e.message : String(e);
+          } finally {
+            run.done = true;
+          }
+        })();
+        json(res, 202, { started: true });
         return;
       }
 
@@ -193,7 +247,7 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
         const run: IndexRun = { startedAt: new Date().toISOString(), lines: [], done: false };
         indexRun = run;
         const full = url.searchParams.get("full") === "1";
-        const runner = opts.indexRunner ?? childIndexRunner(root, opts);
+        const runner = opts.indexRunner ?? childIndexRunner(activeRoot, opts);
         void (async () => {
           try {
             const r = await runner(m => { run.lines.push(m); if (run.lines.length > 100) run.lines.splice(0, run.lines.length - 100); }, full);

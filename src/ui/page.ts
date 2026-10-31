@@ -44,6 +44,8 @@ export const PAGE = `<!doctype html>
   <div class="sub">warm start for coding agents - local, cited, persistent</div>
   <div class="status" id="status">loading&hellip;</div>
   <div class="bar" style="margin-bottom:14px">
+    <input id="repoUrl" type="text" style="flex:1" placeholder="load a public GitHub repo: github.com/owner/repo&hellip;">
+    <button id="repoBtn">Load repo</button>
     <button id="reindexBtn" class="ghost">Reindex</button>
   </div>
   <div class="progress hidden" id="progress"></div>
@@ -74,15 +76,43 @@ const api = (p) => fetch(p).then(async r => { const d = await r.json().catch(()=
 async function status() {
   try {
     const s = await api("/api/status");
-    $("#status").innerHTML = s.indexed
+    const src = s.source ? (s.source.kind === "github" ? "github: " + esc(s.source.label) + " &middot; " : "local: " + esc(s.source.label) + " &middot; ") : "";
+    $("#status").innerHTML = src + (s.indexed
       ? s.chunks + " chunks / " + s.files + " files &middot; " + esc(s.embedder) + " &middot; updated " + new Date(s.updatedAt).toLocaleString() + (s.hybrid ? " &middot; hybrid (experimental)" : "")
         + (s.modifiedSinceIndex > 0 ? ' &middot; <span class="err">' + s.modifiedSinceIndex + " file(s) modified since indexing - results may be stale; reindex to refresh</span>" : "")
-      : 'not indexed yet - run <code>ember index</code> or press Reindex';
+      : 'not indexed yet - run <code>ember index</code> or press Reindex');
     if (s.resumableCheckpoint) $("#status").innerHTML += ' &middot; <span class="err">interrupted run: ' + s.resumableCheckpoint.chunkCount + " chunks checkpointed - Reindex resumes it</span>";
   } catch (e) { $("#status").innerHTML = '<span class="err">' + esc(e.message) + "</span>"; }
 }
 
 let polling = false;
+// One watcher for any index run (reindex or repo load): /api/index-status
+// drives the log until the run settles, then refreshes the status line.
+function watchRun(btn, prog) {
+  if (polling) return;
+  polling = true;
+  const tick = async () => {
+    try {
+      const s = await api("/api/index-status");
+      if (s.lines && s.lines.length) { prog.textContent = s.lines.join("\\n"); prog.scrollTop = prog.scrollHeight; }
+      if (!s.running) {
+        polling = false;
+        if (s.error) prog.textContent += "\\nfailed: " + s.error;
+        else if (s.result) {
+          prog.textContent += "\\ndone: indexed " + s.result.chunks + " chunks from " + s.result.files + " files";
+          if (typeof s.result.embedded === "number")
+            prog.textContent += " (kept " + s.result.kept + ", reused " + s.result.reused + ", newly embedded " + s.result.embedded + ")";
+        }
+        btn.disabled = false;
+        status();
+        return;
+      }
+    } catch (e) { /* transient; keep polling */ }
+    setTimeout(tick, 1000);
+  };
+  tick();
+}
+
 $("#reindexBtn").addEventListener("click", async () => {
   const btn = $("#reindexBtn"), prog = $("#progress");
   btn.disabled = true;
@@ -98,28 +128,30 @@ $("#reindexBtn").addEventListener("click", async () => {
     btn.disabled = false;
     return;
   }
-  if (polling) return;
-  polling = true;
-  const tick = async () => {
-    try {
-      const s = await api("/api/index-status");
-      if (s.lines && s.lines.length) { prog.textContent = s.lines.join("\\n"); prog.scrollTop = prog.scrollHeight; }
-      if (!s.running) {
-        polling = false;
-        if (s.error) prog.textContent += "\\nindexing failed: " + s.error;
-        else if (s.result) {
-          prog.textContent += "\\ndone: indexed " + s.result.chunks + " chunks from " + s.result.files + " files";
-          if (typeof s.result.embedded === "number")
-            prog.textContent += " (kept " + s.result.kept + ", reused " + s.result.reused + ", newly embedded " + s.result.embedded + ")";
-        }
-        btn.disabled = false;
-        status();
-        return;
-      }
-    } catch (e) { /* transient; keep polling */ }
-    setTimeout(tick, 1000);
-  };
-  tick();
+  watchRun(btn, prog);
+});
+
+// Load a public GitHub repo: the server clones it (shallow, no auth),
+// switches the active root and indexes it - the same run machinery as
+// Reindex drives the progress log.
+$("#repoBtn").addEventListener("click", async () => {
+  const btn = $("#repoBtn"), prog = $("#progress");
+  const url = $("#repoUrl").value.trim();
+  if (!url) { prog.classList.remove("hidden"); prog.textContent = "paste a GitHub repo URL first, e.g. https://github.com/pallets/flask"; return; }
+  btn.disabled = true;
+  prog.classList.remove("hidden");
+  prog.textContent = "loading " + url + "...";
+  try {
+    const r = await fetch("/api/load-repo", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url }) });
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 409) prog.textContent = "an index run is already in progress - wait for it to finish first.";
+    else if (!r.ok) throw new Error(d.error || r.statusText);
+  } catch (e) {
+    prog.textContent = "cannot load repo: " + e.message;
+    btn.disabled = false;
+    return;
+  }
+  watchRun(btn, prog);
 });
 
 function linesWithNumbers(text, startLine) {
