@@ -1,0 +1,6 @@
+{
+  "name": "flask",
+  "repo": "https://github.com/pallets/flask",
+  "ref": "49943b5a94413a530761350f04e896f76e8d620e",
+  "note": "Second-corpus holdout. Questions written by reading this tree (sessions, ctx, views, sansio/app, templating, json/provider, config, helpers, testing, cli, scaffold) before any retrieval run. Local mirror used for measurement: ~/flask-stress at the same ref."
+}

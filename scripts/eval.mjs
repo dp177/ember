@@ -1,6 +1,9 @@
-// Same-repo retrieval SANITY CHECK - not a benchmark, not a general quality
-// measure. 15 fixed questions about this one codebase; ground-truth files
-// were chosen by reading the code, before any retrieval run. Metrics: top-1
+// Retrieval SANITY CHECK - not a benchmark, not a general quality measure.
+// Default corpus: 15 fixed questions about THIS codebase (EMBER_EVAL_DIR not
+// set). Holdout corpus: EMBER_EVAL_DIR=eval/flask runs 15 questions against
+// the flask tree pinned in eval/flask/CORPUS.json, so a config cannot be
+// justified from the self-corpus alone. Ground-truth files for both were
+// chosen by reading the code, before any retrieval run. Metrics: top-1
 // and top-5 FILE accuracy (is an expected file the first / among the first
 // five distinct chunk hits) and MRR over that ranking. The corpus is frozen
 // at the commit recorded in eval/CORPUS_REF and materialized via `git
@@ -32,8 +35,26 @@ import { localEmbedderFromEnv } from "../dist/core/local-embedder.js";
 import { indexRepo } from "../dist/core/indexer.js";
 
 const root = path.resolve(import.meta.dirname, "..");
-const questions = JSON.parse(await readFile(path.join(root, "eval", "questions.json"), "utf8"));
-const ref = (process.env.EMBER_EVAL_REF ?? (await readFile(path.join(root, "eval", "CORPUS_REF"), "utf8"))).trim();
+// Corpus selection: EMBER_EVAL_DIR names a directory with questions.json
+// plus either CORPUS_REF (a commit of THIS repo, the default self-corpus)
+// or CORPUS.json ({repo, ref}) for an external holdout corpus, cloned on
+// demand or archived from a local mirror path given as "repo".
+const evalDir = process.env.EMBER_EVAL_DIR ?? "eval";
+const evalPath = (...p) => path.join(root, evalDir, ...p);
+const questions = JSON.parse(await readFile(evalPath("questions.json"), "utf8"));
+let ref, corpusRepo = root;
+try {
+  const spec = JSON.parse(await readFile(evalPath("CORPUS.json"), "utf8"));
+  ref = (process.env.EMBER_EVAL_REF ?? spec.ref).trim();
+  corpusRepo = process.env.EMBER_EVAL_REPO ?? spec.repo;
+} catch {
+  ref = (process.env.EMBER_EVAL_REF ?? (await readFile(evalPath("CORPUS_REF"), "utf8"))).trim();
+}
+if (/^https?:\/\//.test(corpusRepo)) {
+  const clone = await mkdtemp(path.join(os.tmpdir(), "ember-eval-clone-"));
+  execFileSync("git", ["clone", "--quiet", corpusRepo, clone]);
+  corpusRepo = clone;
+}
 const hybrid = process.env.EMBER_HYBRID === "1";
 // EMBER_EVAL_EMBEDDER=local measures the semantic path on the same frozen
 // corpus (needs: npm install @xenova/transformers; downloads the model).
@@ -43,7 +64,7 @@ const embedder = process.env.EMBER_EVAL_EMBEDDER === "local"
 
 const corpus = await mkdtemp(path.join(os.tmpdir(), "ember-eval-"));
 try {
-  execFileSync("git", ["archive", ref, "-o", path.join(corpus, "tree.tar")], { cwd: root });
+  execFileSync("git", ["archive", ref, "-o", path.join(corpus, "tree.tar")], { cwd: corpusRepo });
   execFileSync("tar", ["-xf", "tree.tar"], { cwd: corpus });
   await rm(path.join(corpus, "tree.tar"));
   await indexRepo(corpus, embedder);
@@ -60,7 +81,7 @@ async function runSet(key) {
     const { expect } = item;
     const q = item[key];
     const all = await engine.search(q, 20);
-    if (all.some((h) => h.chunk.file === "eval/questions.json")) {
+    if (all.some((h) => h.chunk.file.endsWith("questions.json"))) {
       throw new Error("eval fixture leaked into results - .emberignore is not working");
     }
     const files = all.slice(0, 5).map((h) => h.chunk.file);

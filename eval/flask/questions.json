@@ -1,0 +1,17 @@
+[
+  { "q": "how are session cookies read and written?", "expect": ["src/flask/sessions.py"], "pq": "serializing user session data into a browser cookie" },
+  { "q": "what happens when a request context is pushed and popped?", "expect": ["src/flask/ctx.py"], "pq": "setting up and tearing down the per-request state" },
+  { "q": "how does a class-based view dispatch to HTTP methods?", "expect": ["src/flask/views.py"], "pq": "routing get and post to methods of a view class" },
+  { "q": "how does flask register a url rule for a view function?", "expect": ["src/flask/sansio/app.py"], "pq": "adding a route and its endpoint to the url map" },
+  { "q": "how is a jinja template rendered with context?", "expect": ["src/flask/templating.py"], "pq": "turning a template file into html with variables" },
+  { "q": "how does flask serialize responses to json?", "expect": ["src/flask/json/provider.py"], "pq": "converting python objects into a json response body" },
+  { "q": "what is the request dispatch order from wsgi call to response?", "expect": ["src/flask/app.py"], "pq": "the steps between an incoming http request and the outgoing response" },
+  { "q": "how are blueprints registered on an application?", "expect": ["src/flask/sansio/app.py"], "pq": "attaching a modular set of routes to the app" },
+  { "q": "how is application configuration loaded from a python object?", "expect": ["src/flask/config.py"], "pq": "populating app settings from a class or module" },
+  { "q": "how do flashed messages reach the next request?", "expect": ["src/flask/helpers.py"], "pq": "one-time notices shown after a redirect" },
+  { "q": "how does the development server get started?", "expect": ["src/flask/app.py"], "pq": "launching the built-in http server for local development" },
+  { "q": "how are before-request and teardown callbacks registered?", "expect": ["src/flask/sansio/scaffold.py"], "pq": "hooks that run around each request" },
+  { "q": "how does flask build urls for endpoints?", "expect": ["src/flask/helpers.py"], "pq": "generating a link from an endpoint name" },
+  { "q": "what does the flask test client wrap?", "expect": ["src/flask/testing.py"], "pq": "simulating http requests against the app in tests" },
+  { "q": "how are command-line commands grouped for flask apps?", "expect": ["src/flask/cli.py"], "pq": "the shell entry point that discovers the application" }
+]
