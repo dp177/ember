@@ -4,13 +4,15 @@
  * capped filename boost. An experimental hybrid mode (EMBER_HYBRID=1 or
  * --hybrid) additionally fuses a BM25 lexical ranking via weighted
  * reciprocal rank fusion. Measured on the 15-question same-repo sanity
- * eval against the pre-hybrid engine on the same corpus (2026-10-28):
- *   baseline:            top-1 5/15, top-5 13/15, MRR 0.502
- *   hybrid, weight 0.25: top-1 6/15, top-5 12/15, MRR 0.510
- * i.e. top-1/MRR tick up but top-5 drops - a tradeoff, not a clear win,
- * so hybrid is opt-in until real semantic embeddings (where the two legs
- * genuinely diverge) are verified. Small 15-question, single-corpus eval;
- * treat differences of 1 as noise. */
+ * eval on the current corpus (measured 2026-10-31):
+ *   baseline:            top-1 5/15, top-5 12/15, MRR 0.483 (paraphrase 1/15, 4/15, 0.133)
+ *   hybrid, weight 0.25: top-1 5/15, top-5 11/15, MRR 0.466 (paraphrase 2/15, 7/15, 0.241)
+ * i.e. hybrid recovers much of the paraphrase loss but gives back a little
+ * verbatim top-5 and MRR - a tradeoff, not a clear win, so hybrid stays
+ * opt-in until real
+ * semantic embeddings (where the two legs genuinely diverge) are verified.
+ * Small 15-question, single-corpus eval; treat differences of 1 as noise.
+ * Reproduce: node scripts/eval.mjs (EMBER_HYBRID=1 for the hybrid row). */
 
 import { HnswIndex } from "./hnsw.js";
 import { EmberStore, type ChunkRecord, type IndexMeta } from "./store.js";

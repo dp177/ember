@@ -14,7 +14,7 @@ import { EmberStore } from "../core/store.js";
 import { NoteStore } from "../core/notes.js";
 import { buildRepoMap, formatRepoMap } from "../core/repomap.js";
 import { answerQuestion } from "../core/ask.js";
-import { JsonlUsageLogger, LlmClient, llmConfigFromEnv } from "../core/llm.js";
+import { JsonlUsageLogger, LlmClient, sharedClientFromEnv } from "../core/llm.js";
 import { PAGE } from "./page.js";
 
 export interface UiOptions { hybrid?: boolean; }
@@ -34,21 +34,17 @@ async function resolveInside(root: string, rel: string): Promise<string | null> 
 }
 
 async function loadEngine(root: string, opts: UiOptions): Promise<EmberEngine> {
-  return EmberEngine.load(root, embedderFromEnv(), { hybrid: opts.hybrid });
+  // embedderFromEnv resolves the shared process-wide provider client, so
+  // per-request engine loads no longer restart the EMBER_MAX_CALLS budget.
+  return EmberEngine.load(root, embedderFromEnv(process.env, JsonlUsageLogger.forRepo(root)), { hybrid: opts.hybrid });
 }
 
 export function createUiServer(root: string, opts: UiOptions = {}): http.Server {
-  // One shared provider client for the whole server: EMBER_MAX_CALLS and
-  // usage accounting aggregate across requests, and its serialized queue
-  // keeps concurrent asks from fanning out to the provider.
-  let sharedClient: LlmClient | null | undefined;
-  const client = (): LlmClient | null => {
-    if (sharedClient === undefined) {
-      const cfg = llmConfigFromEnv();
-      sharedClient = cfg ? new LlmClient(cfg, JsonlUsageLogger.forRepo(root)) : null;
-    }
-    return sharedClient;
-  };
+  // One process-wide provider client backs chat and embeddings alike
+  // (sharedClientFromEnv): EMBER_MAX_CALLS and usage accounting aggregate
+  // across requests, and its serialized queue keeps concurrent asks from
+  // fanning out to the provider.
+  const client = (): LlmClient | null => sharedClientFromEnv(process.env, JsonlUsageLogger.forRepo(root));
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");

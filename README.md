@@ -5,7 +5,7 @@ local web UI.**
 Point Ember at a repo once; every coding agent you use (Claude Code, Cursor,
 Windsurf, …) starts warm instead of cold — with hybrid-capable search, a repo
 map, a mined decision log, and answers that cite `file:line`. MIT licensed,
-local-first, zero native dependencies.
+local-first, no native modules (three pure-JS runtime deps: MCP SDK, commander, zod).
 
 ## The problem
 
@@ -149,21 +149,23 @@ routing, caching and discounts on the provider's side._
   the corpus is frozen for each comparison; the question file itself is
   excluded via `.emberignore`, but demo/docs legitimately contain
   near-identical phrasing, so each question also runs paraphrased. Default
-  engine: verbatim top-1 5/15, top-5 12/15, MRR 0.489; **paraphrase top-1
-  3/15, top-5 5/15, MRR 0.230**. On these 15 questions, rewording cuts
-  accuracy sharply — concrete evidence of the lexical ceiling on this
-  corpus (not a universal bound), and the motivation for semantic
-  embeddings. Hybrid mode (BM25 fused at lexical weight 0.25, `--hybrid` /
-  `EMBER_HYBRID=1`) trades top-5 for top-1 on verbatim queries
-  (6/11/0.493) — a tradeoff, not a win, so it stays opt-in. Reproduce:
-  `node scripts/eval.mjs`.
+  engine: verbatim top-1 5/15, top-5 12/15, MRR 0.483; **paraphrase top-1
+  1/15, top-5 4/15, MRR 0.133** (measured 2026-10-31 — re-run for the
+  current tree). On these 15 questions, rewording cuts accuracy sharply —
+  concrete evidence of the lexical ceiling on this corpus (not a universal
+  bound), and the motivation for semantic embeddings. Hybrid mode (BM25
+  fused at lexical weight 0.25, `--hybrid` / `EMBER_HYBRID=1`) recovers
+  much of the paraphrase loss on this corpus (top-1 2/15, top-5 7/15, MRR
+  0.241) at a small verbatim cost (top-5 11/15, MRR 0.466) — a tradeoff,
+  not a win, so it stays opt-in. Reproduce: `node scripts/eval.mjs`
+  (`EMBER_HYBRID=1` for the hybrid row).
 - **HNSW is exact HNSW, not a placeholder.** M=16, efConstruction=200,
   diversity-preserving neighbor selection (paper alg. 4), serialized graph in
   `.ember/`. Tests measure recall@10 vs brute force (>0.9 on clustered data).
 - **Incremental indexing is hash-based.** `.ember/files.json` stores a sha1
   per file. Unchanged files keep their chunks and vectors; modified files are
   re-chunked and re-embedded; deleted files are removed. Switching embedders
-  (kind or dimension) triggers an automatic full rebuild.
+  (kind, model or dimension) triggers an automatic full rebuild.
 - **Note recall is keyword matching.** `recall_notes` scores by unique
   query-term overlap — predictable and offline, not semantic.
 - **Local-first.** The index never leaves your machine; network calls happen
@@ -211,7 +213,7 @@ Deployed via GitHub Pages from the `gh-pages` branch.
 ## Tests
 
 ```bash
-npm test          # 47 tests, hermetic from a fresh clone: HNSW recall,
+npm test          # 53 tests, hermetic from a fresh clone: HNSW recall,
                   # chunking, scanner determinism, end-to-end index+search,
                   # notes persistence, incremental re-index, corrupt/torn
                   # data recovery, LLM provider behavior against a local

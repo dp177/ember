@@ -6,8 +6,9 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import type { AddressInfo } from "node:net";
+import * as http from "node:http";
 import { createUiServer } from "../src/ui/server.js";
-import { HashingEmbedder } from "../src/core/embedder.js";
+import { HashingEmbedder, embedderFromEnv } from "../src/core/embedder.js";
 import { indexRepo } from "../src/core/indexer.js";
 
 const ALPHA = "export function alphaSearch(input: string): string {\n  return input.trim();\n}\n";
@@ -106,6 +107,55 @@ test("ui security: path escapes, symlink escape, and cross-origin mutations are 
     assert.ok(notes.notes.some((n: any) => n.text === "same-origin ok"));
   } finally {
     await close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("ui: EMBER_MAX_CALLS holds across requests (one process-wide provider client)", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-ui-cap-"));
+  await fs.writeFile(path.join(dir, "alpha.ts"), ALPHA);
+  let calls = 0;
+  const mock = http.createServer((req, res) => {
+    let data = "";
+    req.on("data", c => (data += c));
+    req.on("end", () => {
+      calls++;
+      const body = data ? JSON.parse(data) : {};
+      const inputs = Array.isArray(body.input) ? body.input : [body.input];
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: inputs.map(() => ({ embedding: [0.1, 0.2, 0.3, 0.4] })) }));
+    });
+  });
+  await new Promise<void>(r => mock.listen(0, "127.0.0.1", r));
+  const mockPort = (mock.address() as AddressInfo).port;
+  const KEYS = ["EMBER_API_BASE", "EMBER_API_KEY", "EMBER_EMBED_MODEL", "EMBER_EMBED_DIM", "EMBER_MAX_CALLS"];
+  const saved = Object.fromEntries(KEYS.map(k => [k, process.env[k]]));
+  try {
+    process.env.EMBER_API_BASE = `http://127.0.0.1:${mockPort}`;
+    process.env.EMBER_API_KEY = "k";
+    process.env.EMBER_EMBED_MODEL = "m";
+    process.env.EMBER_EMBED_DIM = "4";
+    await indexRepo(dir, embedderFromEnv());
+    const callsAfterIndex = calls;
+    // The cap is configured only now: the server's provider client must be
+    // a fresh budget of 1 for the whole process, not 1 per request.
+    process.env.EMBER_MAX_CALLS = "1";
+    const server = createUiServer(dir);
+    await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const first = await (await fetch(`${base}/api/search?q=trim`)).json() as any;
+      assert.ok(Array.isArray(first.hits), "first search succeeds");
+      const second = await (await fetch(`${base}/api/search?q=helper`)).json() as any;
+      assert.match(String(second.error ?? ""), /EMBER_MAX_CALLS=1/, "second search hits the process-wide cap instead of resetting it");
+      assert.equal(calls, callsAfterIndex + 1, "exactly one provider request left the process for both searches");
+    } finally {
+      await new Promise<void>(r => server.close(() => r()));
+    }
+  } finally {
+    for (const k of KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+    (mock as any).closeAllConnections?.();
+    await new Promise(r => mock.close(() => r(null)));
     await fs.rm(dir, { recursive: true, force: true });
   }
 });

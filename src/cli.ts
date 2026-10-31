@@ -11,7 +11,7 @@ import { NoteStore } from "./core/notes.js";
 import { buildRepoMap, formatRepoMap } from "./core/repomap.js";
 import { getCommits, getDecisions } from "./core/decisions.js";
 import { answerQuestion } from "./core/ask.js";
-import { JsonlUsageLogger, LlmClient, llmConfigFromEnv } from "./core/llm.js";
+import { JsonlUsageLogger, llmConfigFromEnv, sharedClientFromEnv } from "./core/llm.js";
 import { promises as fs } from "node:fs";
 import { startMcpServer } from "./mcp/server.js";
 import { createUiServer } from "./ui/server.js";
@@ -57,8 +57,8 @@ program.command("ask <question>")
   .action(async (question, opts) => {
     const root = rootOf(opts.path);
     const engine = await EmberEngine.load(root, embedderFromEnv(), hybridOf(opts));
-    const cfg = llmConfigFromEnv();
-    const client = cfg ? new LlmClient(cfg, JsonlUsageLogger.forRepo(root)) : null;
+    // Shared with the query embedder above: one cap counter per process.
+    const client = sharedClientFromEnv(process.env, JsonlUsageLogger.forRepo(root));
     console.log((await answerQuestion(engine, question, 10, { client })).text);
   });
 

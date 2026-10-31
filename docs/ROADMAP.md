@@ -76,6 +76,16 @@ Spend discipline for the paid run (authority-critical):
       720 chunks): default top-1 5/15, top-5 12/15, MRR 0.489; hybrid
       top-1 6/15, top-5 11/15, MRR 0.493 (same tradeoff). Earlier numbers
       were measured on a corpus containing the benchmark fixture.
+- [x] Hardening (2026-10-31): embedder identity now carries the model, so a
+      same-dimension EMBER_EMBED_MODEL switch forces an honest full rebuild
+      instead of silently mixing two embedding spaces. .ember saves are
+      staged and swapped atomically (no half-written stores on crash) and
+      preserve notes/usage files. One memoized process-wide provider client
+      across CLI, MCP and the web UI makes EMBER_MAX_CALLS per-process for
+      real (previously each UI/MCP request restarted the counter). Eval
+      re-measured on the current corpus: default verbatim 5/12/0.483,
+      paraphrase 1/4/0.133; hybrid verbatim 5/11/0.466, paraphrase
+      2/7/0.241.
 
 ## M4 - Portfolio-grade presentation (mostly done)
 

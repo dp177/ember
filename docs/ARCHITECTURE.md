@@ -39,9 +39,12 @@ scan -> chunk -> embed -> HNSW -> persist (.ember/)
    Tests measure recall@10 against brute force (>0.9 on clustered data).
 5. **Persist** (`store.ts`): `meta.json`, `chunks.jsonl`, `vectors.f32`
    (row-major, aligned with chunk ids), `hnsw.json`, `files.json` (per-file
-   sha1 for incremental re-index), `notes.jsonl`, `usage.jsonl`. Reads are
-   hardened against torn/corrupt tails; the notes tail is repaired before
-   append.
+   sha1 for incremental re-index), `notes.jsonl`, `usage.jsonl`. Saves are
+   staged in a sibling directory and swapped in with renames (atomic per
+   directory on the same filesystem), so a crash mid-save cannot leave a
+   half-written file set; notes and the usage log are carried across.
+   Reads are hardened against torn/corrupt tails; the notes tail is
+   repaired before append.
 
 ## Retrieval
 
@@ -51,12 +54,13 @@ rescore by exact dot product, add a capped filename-token boost, cut to k.
 Experimental hybrid path (`--hybrid` / `EMBER_HYBRID=1`): fuse the vector
 ranking with a BM25 ranking (chunk text + filename tokens) using reciprocal
 rank fusion, lexical leg weighted 0.25. Measured on the 15-question sanity
-eval over the current corpus (a sanity check, not a benchmark: 15 questions,
-one corpus, ±1 is noise). Default: verbatim top-1 5/15, top-5 12/15, MRR
-0.489; paraphrased top-1 3/15, top-5 5/15, MRR 0.230. Hybrid: verbatim
-6/11/0.493 - a tradeoff, not a win, so it is opt-in. The paraphrase collapse
-quantifies the lexical embedder's core limitation and motivates semantic
-embeddings (M2). Equal weighting was measured and rejected (top-5 13 -> 10
+eval over the current corpus on 2026-10-31 (a sanity check, not a
+benchmark: 15 questions, one corpus, ±1 is noise). Default: verbatim top-1
+5/15, top-5 12/15, MRR 0.483; paraphrased top-1 1/15, top-5 4/15, MRR
+0.133. Hybrid: verbatim 5/11/0.466, paraphrase 2/7/0.241 - it recovers much
+of the paraphrase loss at a small verbatim cost; a tradeoff, not a win, so
+it is opt-in. The paraphrase collapse quantifies the lexical
+embedder's core limitation and motivates semantic embeddings (M2). Equal weighting was measured and rejected (top-5 13 -> 10
 on the earlier corpus: exact-match ranking over-rewards files that echo
 query phrasing).
 
@@ -90,8 +94,10 @@ header and never logged.
 guards: they block the named request, and their error messages say so.
 `EMBER_MAX_OUTPUT_TOKENS` caps synthesized answer length (default 1024).
 Requests are serialized per client instance (concurrency 1, enforced by an
-in-process queue); the web UI shares one client across requests so the cap
-and queue hold globally there. None of this tracks
+in-process queue). Every entry point (CLI, MCP server, web UI) resolves
+chat and embeddings through one memoized process-wide client
+(`sharedClientFromEnv`), so the cap, queue and usage accounting genuinely
+hold per process rather than per request. None of this tracks
 or limits spending: Ember has no access to provider billing, and logged
 token counts (provider-reported or estimated) are never converted to
 dollars.
@@ -113,7 +119,7 @@ dollars.
 
 ## Testing strategy
 
-47 tests, hermetic from a fresh clone (`npm test` builds first). Provider
+53 tests, hermetic from a fresh clone (`npm test` builds first). Provider
 behavior is tested against an in-process mock OpenAI-compatible server, so
 the LLM layer is fully verified with zero real calls. MCP is tested through
 real stdio sessions. The web UI has API-level workflow + security tests and

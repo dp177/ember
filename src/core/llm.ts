@@ -3,7 +3,9 @@
  *
  * What the guards ARE: EMBER_MAX_CALLS caps provider requests per process
  * and EMBER_MAX_PROMPT_CHARS caps input size per call. Both actually block
- * the request they name.
+ * the request they name. The per-process cap is only real because every
+ * entry point resolves one shared client (sharedClientFromEnv): a fresh
+ * client per request would restart the counter.
  * What they are NOT: billing limits. Ember never sees provider billing;
  * real spend is only on the provider's dashboard. Usage records say
  * "estimated" whenever a token figure is a chars/4 approximation rather
@@ -222,6 +224,25 @@ function parseOptInt(v: string | undefined): number | undefined {
 /** Build provider config from the environment, or null when unconfigured
  * (offline mode). EMBER_API_BASE is the single base URL; EMBER_CHAT_BASE is
  * still honored for backward compatibility. */
+/** One process-wide provider client shared by every Ember entry point in
+ * this process (CLI, MCP server, web UI - chat and embeddings alike). This
+ * is what makes the documented per-process semantics of EMBER_MAX_CALLS
+ * literally true: a fresh client per request would restart the counter, and
+ * separate chat/embedding clients would each get their own budget. Memoized
+ * on the full resolved config, so a mid-process config change starts a
+ * fresh client rather than silently mixing budgets. */
+let sharedClient: { key: string; client: LlmClient } | null = null;
+export function sharedClientFromEnv(
+  env: Record<string, string | undefined> = typeof process !== "undefined" ? process.env : {},
+  usage?: UsageLogger,
+): LlmClient | null {
+  const cfg = llmConfigFromEnv(env);
+  if (!cfg) return null;
+  const key = JSON.stringify(cfg);
+  if (!sharedClient || sharedClient.key !== key) sharedClient = { key, client: new LlmClient(cfg, usage) };
+  return sharedClient.client;
+}
+
 export function llmConfigFromEnv(
   env: Record<string, string | undefined> = typeof process !== "undefined" ? process.env : {},
 ): LlmConfig | null {

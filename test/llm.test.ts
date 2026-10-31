@@ -7,8 +7,8 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as http from "node:http";
-import { LlmClient, JsonlUsageLogger, llmConfigFromEnv } from "../src/core/llm.js";
-import { HttpEmbedder } from "../src/core/embedder.js";
+import { LlmClient, JsonlUsageLogger, llmConfigFromEnv, sharedClientFromEnv } from "../src/core/llm.js";
+import { HttpEmbedder, embedderFromEnv } from "../src/core/embedder.js";
 
 interface MockSpec {
   routes: Record<string, (body: any) => [number, unknown]>;
@@ -172,4 +172,29 @@ test("concurrency: parallel calls are serialized (max 1 in flight) and share the
   await client.chat([{ role: "user", content: "three" }]);
   await assert.rejects(() => client.chat([{ role: "user", content: "four" }]), /EMBER_MAX_CALLS=3/);
   await new Promise(r => { srv.closeAllConnections?.(); srv.close(() => r(null)); });
+});
+
+test("sharedClientFromEnv: chat + embeddings share one process-wide request cap", async () => {
+  const dir = await tmp();
+  let calls = 0;
+  const spec: MockSpec = {
+    requests: [],
+    routes: {
+      "/chat/completions": () => { calls++; return [200, { choices: [{ message: { content: "ok" } }] }]; },
+      "/embeddings": (body) => { calls++; const inputs = Array.isArray(body.input) ? body.input : [body.input]; return [200, { data: inputs.map(() => ({ embedding: [0.1, 0.2, 0.3, 0.4] })) }]; },
+    },
+  };
+  const { base, close } = await mockServer(spec);
+  const env = { EMBER_API_BASE: base, EMBER_API_KEY: "k", EMBER_CHAT_MODEL: "m", EMBER_EMBED_MODEL: "m", EMBER_EMBED_DIM: "4", EMBER_MAX_CALLS: "2" };
+  const logger = new JsonlUsageLogger(path.join(dir, "usage.jsonl"));
+  const client = sharedClientFromEnv(env, logger);
+  assert.ok(client, "configured env yields a client");
+  assert.equal(sharedClientFromEnv(env, logger), client, "same config resolves the same client");
+  const emb = embedderFromEnv(env, logger);
+  assert.ok(emb.kind.startsWith("http-openai-compatible:"), "http embedder in play");
+  await emb.embed(["one"]);                              // provider call 1 (embeddings path)
+  await client!.chat([{ role: "user", content: "two" }]); // provider call 2 (chat path, same counter)
+  await assert.rejects(() => emb.embed(["three"]), /EMBER_MAX_CALLS=2/, "the third request across either path is blocked");
+  assert.equal(calls, 2, "exactly two provider requests left the process");
+  await close(); await fs.rm(dir, { recursive: true, force: true });
 });

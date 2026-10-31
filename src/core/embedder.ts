@@ -12,7 +12,7 @@
  */
 
 import { normalize } from "./hnsw.js";
-import { LlmClient, llmConfigFromEnv, type UsageLogger } from "./llm.js";
+import { LlmClient, llmConfigFromEnv, sharedClientFromEnv, type UsageLogger } from "./llm.js";
 
 export interface Embedder {
   readonly kind: string;
@@ -82,7 +82,11 @@ export class HashingEmbedder implements Embedder {
 }
 
 export class HttpEmbedder implements Embedder {
-  readonly kind = "http-openai-compatible";
+  /** Kind carries the model: two same-dim models are different embedding
+   * spaces, and mixing their vectors in one index silently corrupts
+   * search. The indexer's kind comparison uses this to force an honest
+   * full rebuild when EMBER_EMBED_MODEL changes. */
+  readonly kind: string;
   readonly dim: number;
   private client: LlmClient;
   constructor(
@@ -91,6 +95,7 @@ export class HttpEmbedder implements Embedder {
     private model: string,
     dim: number,
   ) {
+    this.kind = `http-openai-compatible:${model}`;
     this.dim = dim;
     this.client = typeof clientOrBase === "string"
       ? new LlmClient({ base: clientOrBase, apiKey: apiKey ?? "", embedModel: model, embedDim: dim })
@@ -122,7 +127,9 @@ export function embedderFromEnv(
   const cfg = llmConfigFromEnv(env);
   if (cfg?.embedModel) {
     const dim = cfg.embedDim ?? 1536;
-    return new HttpEmbedder(new LlmClient(cfg, usage), undefined, cfg.embedModel, dim);
+    // Shared process-wide client: the request cap and usage accounting
+    // aggregate across every caller in this process, per the docs.
+    return new HttpEmbedder(sharedClientFromEnv(env, usage)!, undefined, cfg.embedModel, dim);
   }
   return new HashingEmbedder();
 }
