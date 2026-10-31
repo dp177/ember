@@ -156,6 +156,14 @@ test("default cadence: early first checkpoint at 50 files, progress every 100, c
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
+test("autoEmbedBatch ladder: tight memory gets small batches, override-friendly", async () => {
+  const { autoEmbedBatch } = await import("../src/core/local-embedder.js");
+  const GB = 1024 ** 3;
+  assert.equal(autoEmbedBatch(1.5 * GB), 4, "2 GB-class machine: the measured-safe size");
+  assert.equal(autoEmbedBatch(4 * GB), 8);
+  assert.equal(autoEmbedBatch(16 * GB), 16, "headroom: full batch");
+});
+
 test("time-based checkpoint cadence saves progress on slow runs (EMBER_CHECKPOINT_MS)", async () => {
   const dir = await mkrepo(6);
   try {

@@ -1,15 +1,14 @@
-/** Optional LOCAL semantic embeddings: a real transformer model running in
- * pure WASM via transformers.js - no API key, no provider, no per-call cost,
+/** LOCAL semantic embeddings: a real transformer model running in pure
+ * WASM via transformers.js - no API key, no provider, no per-call cost,
  * and nothing leaves the machine. This is the measured fix for the lexical
- * paraphrase ceiling (see README "Honest capability notes").
- *
- * Deliberately NOT a hard dependency: @xenova/transformers is a large
- * install, so Ember stays lean for users who only want the offline lexical
- * engine. Enable with EMBER_LOCAL_EMBED=1 after
- * `npm install @xenova/transformers` (or EMBER_LOCAL_EMBED_MODEL for a
- * different feature-extraction model + EMBER_LOCAL_EMBED_DIM for its width).
- * The first embed() downloads the model to the transformers.js cache. */
+ * paraphrase ceiling (see README "Honest capability notes"), and the
+ * default embedding path.
+ * EMBER_LOCAL_EMBED_MODEL selects a different feature-extraction model and
+ * EMBER_LOCAL_EMBED_DIM its width; EMBER_EMBED_BATCH overrides the
+ * memory-driven batch size (see autoEmbedBatch). The first embed()
+ * downloads the model to the transformers.js cache, then runs offline. */
 
+import * as os from "node:os";
 import type { Embedder } from "./embedder.js";
 import { normalize } from "./hnsw.js";
 
@@ -22,10 +21,21 @@ export interface FeatureExtractor {
   (texts: string[], opts: { pooling: string; normalize: boolean }): Promise<{ dims: number[]; data: Float32Array | number[] }>;
 }
 
+/** Conservative ladder: tight machines get small batches. Only the
+ * bottom rung is measured (2 GB box: batch 4 stable); 8 is an unmeasured
+ * middle rung. Units: bytes free at embed time. */
+export function autoEmbedBatch(freeBytes: number): number {
+  const gb = freeBytes / (1024 ** 3);
+  if (gb < 3) return 4;
+  if (gb < 6) return 8;
+  return 16;
+}
+
 export class LocalEmbedder implements Embedder {
   readonly kind: string;
   readonly dim: number;
   private extractor: FeatureExtractor | null = null;
+  private batchNoteShown = false;
 
   constructor(
     private model = DEFAULT_LOCAL_EMBED_MODEL,
@@ -84,8 +94,14 @@ export class LocalEmbedder implements Embedder {
     // batch x sequence and does not shrink between calls. Measured on a
     // 2-core/2 GB box: batch 16 on real code chunks drove the indexer past
     // 1.3 GB anon RSS and the kernel OOM-killed it (dmesg confirmed);
-    // EMBER_EMBED_BATCH lowers the peak at some throughput cost.
-    const BATCH = parseInt(process.env.EMBER_EMBED_BATCH ?? "", 10) || 16;
+    // batch 4 ran the same corpus at a stable ~476 MB total RSS.
+    // EMBER_EMBED_BATCH overrides; otherwise pick from CURRENT free memory
+    // so a memory-tight machine gets the safe size without knowing the knob.
+    const BATCH = parseInt(process.env.EMBER_EMBED_BATCH ?? "", 10) || autoEmbedBatch(os.freemem());
+    if (BATCH < 16 && !this.batchNoteShown) {
+      this.batchNoteShown = true;
+      console.error(`local embedder: batch size ${BATCH} (auto from free memory; override with EMBER_EMBED_BATCH)`);
+    }
     for (let i = 0; i < texts.length; i += BATCH) {
       const batch = texts.slice(i, i + BATCH).map(t => t.slice(0, 2000)); // model context guard
       const res = await extractor(batch, { pooling: "mean", normalize: true });

@@ -28,6 +28,7 @@ test("local embedder: kind carries the model; vectors are normalized to the conf
 });
 
 test("local embedder: batches in 16s and caps text length", async () => {
+  process.env.EMBER_EMBED_BATCH = "16"; // pin: the auto ladder is host-memory-dependent
   const calls: string[][] = [];
   const emb = new LocalEmbedder("m", 4, () => Promise.resolve(stub(4, calls)));
   const texts = Array.from({ length: 35 }, (_, i) => `t${i}`);
@@ -36,6 +37,7 @@ test("local embedder: batches in 16s and caps text length", async () => {
   assert.equal(out.length, 35);
   assert.deepEqual(calls.map(c => c.length), [16, 16, 3], "16/16/3 batches");
   assert.equal(calls[0][0].length, 2000, "overlong text is capped at the model context guard");
+  delete process.env.EMBER_EMBED_BATCH;
 });
 
 test("local embedder: model dim mismatch fails honestly", async () => {
