@@ -215,10 +215,14 @@ async function loadRepoUrl(url) {
     try {
         const loaded = await fetchAndChunk(repo, setStatus);
         setStatus(`embedding ${loaded.chunks.length} chunks from ${loaded.files} files (local WASM, in your browser)...`);
-        const d = await buildDemoIndexFromChunks(loaded.chunks, builtin.embedder, { kind: "github", label: repo.label, branch: loaded.branch }, setStatus);
+        // parseGitHubUrl's label is display-flavored ("owner/repo@ref"); the
+        // source label must stay canonical ("owner/repo") or hit links and
+        // recent-list dedupe break.
+        const canonical = `${repo.owner}/${repo.repo}`;
+        const d = await buildDemoIndexFromChunks(loaded.chunks, builtin.embedder, { kind: "github", label: canonical, branch: loaded.branch }, setStatus);
         active = d;
         const rec = {
-            label: repo.label, branch: loaded.branch,
+            label: canonical, branch: loaded.branch,
             chunkCount: d.meta.chunkCount, fileCount: d.meta.fileCount,
             loadedAt: new Date().toISOString(),
         };
