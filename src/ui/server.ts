@@ -38,12 +38,24 @@ export type IndexRunner = (onLine: (line: string) => void, full: boolean) => Pro
  * 2 GB machine; the process died with ~160 MB free). As a child, the server
  * keeps serving the previous index during the run, and a dead worker becomes
  * a visible, resumable error in the panel instead of a vanished server. */
-function childIndexRunner(root: string): IndexRunner {
+function childIndexRunner(root: string, opts: UiOptions): IndexRunner {
   const cli = fileURLToPath(new URL("../cli.js", import.meta.url));
+  // The child resolves its own embedder from env, so an injected embedder's
+  // identity must be mirrored through it: a test's hashing embedder becomes
+  // EMBER_LEXICAL=1, an injected local model stays itself. Without this the
+  // child quietly reindexed with the env default - which is how the suite
+  // downloaded the real model despite every test injecting a stub.
+  const env: NodeJS.ProcessEnv = { ...process.env, EMBER_INDEX_RESULT_JSON: "1" };
+  if (opts.embedder) {
+    if (opts.embedder.kind === "local-hashing-lexical") env.EMBER_LEXICAL = "1";
+    else if (opts.embedder.kind.startsWith("local-wasm:")) env.EMBER_LOCAL_EMBED_MODEL = opts.embedder.kind.slice("local-wasm:".length);
+    // Other injected kinds have no env representation; those tests inject
+    // indexRunner too.
+  }
   return (onLine, full) => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cli, "index", ...(full ? ["--full"] : [])], {
       cwd: root,
-      env: { ...process.env, EMBER_INDEX_RESULT_JSON: "1" },
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let result: { chunks: number; files: number } | null = null;
@@ -181,7 +193,7 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
         const run: IndexRun = { startedAt: new Date().toISOString(), lines: [], done: false };
         indexRun = run;
         const full = url.searchParams.get("full") === "1";
-        const runner = opts.indexRunner ?? childIndexRunner(root);
+        const runner = opts.indexRunner ?? childIndexRunner(root, opts);
         void (async () => {
           try {
             const r = await runner(m => { run.lines.push(m); if (run.lines.length > 100) run.lines.splice(0, run.lines.length - 100); }, full);

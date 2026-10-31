@@ -57,7 +57,11 @@ slowly, expensively, and often wrong. Humans carry that context implicitly.
 
 ```bash
 npm install
-npm test          # builds, then runs the suite (hermetic from a fresh clone)
+npm test          # builds, then runs the suite (hermetic from a fresh clone:
+                  # no network, no model download; the MCP stdio tests spawn the
+                  # real CLI/server with EMBER_LEXICAL=1)
+# EMBER_LIVE_TESTS=1 npm test runs the same suite against the real local
+# model instead - that variant downloads the model once and needs network.
 
 # index any repo
 node dist/cli.js index --path /path/to/repo

@@ -1,3 +1,12 @@
+/** Spawned CLI/server processes inherit EMBER_LEXICAL=1 so the suite stays
+ * hermetic and offline: these tests cover MCP protocol behavior (engine
+ * reload visibility, staleness), which does not depend on embedding kind.
+ * Set EMBER_LIVE_TESTS=1 to run the whole suite against the real local
+ * model instead - that variant downloads it once and needs network. */
+const childEnv = process.env.EMBER_LIVE_TESTS === "1"
+  ? { ...process.env }
+  : { ...process.env, EMBER_LEXICAL: "1" };
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
@@ -15,6 +24,7 @@ class McpTestClient {
   constructor(root: string) {
     this.proc = spawn(process.execPath, [path.resolve("dist/cli.js"), "serve", "--path", root], {
       stdio: ["pipe", "pipe", "inherit"],
+      env: childEnv,
     });
     const rl = readline.createInterface({ input: this.proc.stdout! });
     rl.on("line", line => {
@@ -106,7 +116,7 @@ test("MCP stdio: engine load failures are not cached - external index becomes vi
 
     // Index from OUTSIDE the server (the CLI), not via index_repo.
     await new Promise<void>((resolve, reject) => {
-      const p = spawn(process.execPath, [path.resolve("dist/cli.js"), "index", "--path", dir], { stdio: "inherit" });
+      const p = spawn(process.execPath, [path.resolve("dist/cli.js"), "index", "--path", dir], { stdio: "inherit", env: childEnv });
       p.on("exit", code => (code === 0 ? resolve() : reject(new Error(`cli index exited ${code}`))));
     });
 
@@ -125,7 +135,7 @@ test("MCP stdio: cached engine stays fresh across external re-index and delete",
   await fs.writeFile(src, "export function warmCache(): string { return 'warm' }\n");
 
   const cliIndex = () => new Promise<void>((resolve, reject) => {
-    const p = spawn(process.execPath, [path.resolve("dist/cli.js"), "index", "--path", dir], { stdio: "inherit" });
+    const p = spawn(process.execPath, [path.resolve("dist/cli.js"), "index", "--path", dir], { stdio: "inherit", env: childEnv });
     p.on("exit", code => (code === 0 ? resolve() : reject(new Error(`cli index exited ${code}`))));
   });
 
