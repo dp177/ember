@@ -9,7 +9,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { HashingEmbedder, type Embedder } from "../src/core/embedder.js";
 import { LocalEmbedder, type PipelineFactory } from "../src/core/local-embedder.js";
-import { indexRepo } from "../src/core/indexer.js";
+import { indexRepo, readCheckpointInfo } from "../src/core/indexer.js";
 import { EmberEngine } from "../src/core/engine.js";
 
 class FlakyEmbedder implements Embedder {
@@ -139,4 +139,36 @@ test("embedding progress is logged between checkpoints (log-only, no checkpoint 
     delete process.env.EMBER_CHECKPOINT_FILES;
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+test("default progress cadence is 100 files (no env override)", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-progress-"));
+  try {
+    for (let i = 0; i < 205; i++) await fs.writeFile(path.join(dir, `f${i}.ts`), `export function fn${i}(): number { return ${i}; }\n`);
+    const logs: string[] = [];
+    await indexRepo(dir, new HashingEmbedder(), m => logs.push(m));
+    const progress = logs.filter(m => /^embedded \d+\/\d+ chunks \(\d+\/\d+ files\)( - checkpoint saved)?$/.test(m));
+    assert.deepEqual(progress, [
+      "embedded 100/205 chunks (100/205 files)",
+      "embedded 200/205 chunks (200/205 files) - checkpoint saved",
+    ], "every 100 files prints progress by default; the 200-file mark is the checkpoint line (same counts)");
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test("readCheckpointInfo reports an interrupted run and clears with it", async () => {
+  const dir = await mkrepo(6);
+  try {
+    for (let i = 0; i < 6; i++) await fs.writeFile(path.join(dir, `f${i}.ts`), `export function fn${i}V3(): number { return ${i}; }\n`);
+    await indexRepo(dir, new HashingEmbedder());
+    for (let i = 0; i < 6; i++) await fs.writeFile(path.join(dir, `f${i}.ts`), `export function fn${i}V4(): number { return ${i}; }\n`);
+    process.env.EMBER_CHECKPOINT_FILES = "2";
+    await assert.rejects(() => indexRepo(dir, new FlakyEmbedder(2)), /simulated interruption/);
+    const info = await readCheckpointInfo(dir);
+    assert.ok(info, "checkpoint visible to status surfaces");
+    assert.equal(info!.chunkCount, 2);
+    assert.equal(info!.files, 2);
+    assert.equal(info!.embedderKind, "local-hashing-lexical");
+    await indexRepo(dir, new HashingEmbedder());
+    assert.equal(await readCheckpointInfo(dir), null, "cleared after the completed run");
+  } finally { delete process.env.EMBER_CHECKPOINT_FILES; await fs.rm(dir, { recursive: true, force: true }); }
 });

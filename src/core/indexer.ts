@@ -56,6 +56,15 @@ async function readCheckpoint(root: string, embedder: Embedder): Promise<{ cp: C
   } catch { return null; }
 }
 
+/** Status surfaces read the checkpoint WITHOUT an embedder: presence is
+ * reported, model/source validation happens on the actual resume. */
+export async function readCheckpointInfo(root: string): Promise<{ chunkCount: number; embedderKind: string; dim: number; files: number } | null> {
+  try {
+    const cp = JSON.parse(await fs.readFile(`${checkpointDir(root)}/checkpoint.json`, "utf8")) as Checkpoint;
+    return { chunkCount: cp.chunkCount, embedderKind: cp.embedderKind, dim: cp.dim, files: Object.keys(cp.hashes).length };
+  } catch { return null; }
+}
+
 async function clearCheckpoint(root: string): Promise<void> {
   await fs.rm(checkpointDir(root), { recursive: true, force: true });
 }

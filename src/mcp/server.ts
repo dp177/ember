@@ -8,7 +8,7 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { embedderChoiceFromEnv, embedderFromEnv } from "../core/embedder.js";
 import { EmberEngine } from "../core/engine.js";
-import { indexRepo } from "../core/indexer.js";
+import { indexRepo, readCheckpointInfo } from "../core/indexer.js";
 import { EmberStore } from "../core/store.js";
 import { NoteStore } from "../core/notes.js";
 import { mtimeDrift } from "../core/freshness.js";
@@ -189,7 +189,9 @@ export async function startMcpServer(defaultRoot: string): Promise<void> {
     if (!meta) return text(`no index at ${root}/.ember - run index_repo first`);
     const drift = await mtimeDrift(new EmberStore(root), root).catch(() => null);
     const stale = drift && drift > 0 ? `, ${drift} file(s) modified since indexing (mtime heuristic - may be stale; re-run index_repo to refresh)` : "";
-    return text(`indexed: ${meta.chunkCount} chunks / ${meta.fileCount} files, embedder=${meta.embedderKind} dim=${meta.dim}, updated ${meta.updatedAt}${stale}`);
+    const cp = await readCheckpointInfo(root);
+    const resumable = cp ? `, resumable checkpoint: ${cp.chunkCount} chunks from an interrupted run (next index_repo resumes after validating model and sources)` : "";
+    return text(`indexed: ${meta.chunkCount} chunks / ${meta.fileCount} files, embedder=${meta.embedderKind} dim=${meta.dim}, updated ${meta.updatedAt}${stale}${resumable}`);
   });
 
   await server.connect(new StdioServerTransport());

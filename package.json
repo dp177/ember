@@ -1,6 +1,6 @@
 {
   "name": "ember-mcp",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "description": "Ember - a warm start for coding agents. Local-first, persistent codebase memory over MCP.",
   "type": "module",
   "license": "MIT",

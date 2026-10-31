@@ -5,7 +5,7 @@ import { Command } from "commander";
 import * as path from "node:path";
 import { embedderChoiceFromEnv, embedderFromEnv } from "./core/embedder.js";
 import { EmberEngine } from "./core/engine.js";
-import { indexRepo } from "./core/indexer.js";
+import { indexRepo, readCheckpointInfo } from "./core/indexer.js";
 import { readSourceContext } from "./core/context.js";
 import { checkFreshness, mtimeDrift } from "./core/freshness.js";
 import { EmberStore } from "./core/store.js";
@@ -164,6 +164,8 @@ program.command("status")
     console.log(`indexed: ${meta.chunkCount} chunks / ${meta.fileCount} files`);
     console.log(`embedder: ${meta.embedderKind} (dim ${meta.dim})`);
     console.log(`updated:  ${meta.updatedAt}`);
+    const cp = await readCheckpointInfo(root);
+    if (cp) console.log(`resumable: an interrupted index run left a checkpoint (${cp.chunkCount} chunks from ${cp.files} files, ${cp.embedderKind}) - the next 'ember index' resumes it after validating model and sources`);
     if (meta.capped) console.log(`partial:  scan hit the file cap - the index covers only part of this repo`);
     const fresh = await checkFreshness(store, root);
     if (fresh) {

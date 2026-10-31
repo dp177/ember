@@ -222,7 +222,10 @@ Indexing now checkpoints progress and a rerun resumes it:
   not detectable by name comparison.
 - A completed run (or `ember index --full`) clears the checkpoint.
 - Between checkpoints, progress lines log every 100 files
-  (`EMBER_PROGRESS_FILES` overrides) - log-only, no checkpoint writes.
+  (`EMBER_PROGRESS_FILES` overrides) - log-only, no checkpoint writes. When
+  a 100-file progress mark coincides with a checkpoint save, the checkpoint
+  line carries the counts. `ember status`, the web UI /api/status and the
+  MCP index_status tool report a leftover checkpoint as resumable state.
 
 ## Testing strategy
 
