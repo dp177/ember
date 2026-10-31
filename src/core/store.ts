@@ -160,8 +160,14 @@ export class EmberStore {
     meta.generation = generation;
     await fs.writeFile(path.join(tmp, "meta.json"), JSON.stringify(meta, null, 2));
     await fs.writeFile(path.join(tmp, "generation"), generation + "\n");
-    const lines = chunks.map(c => JSON.stringify(c)).join("\n") + "\n";
-    await fs.writeFile(path.join(tmp, "chunks.jsonl"), lines);
+    // Batched writes, same reason as the checkpoint writer: avoid a
+    // transient whole-corpus string copy at the end of a large run.
+    const ch = await fs.open(path.join(tmp, "chunks.jsonl"), "w");
+    try {
+      for (let b = 0; b < chunks.length; b += 500) {
+        await ch.write(chunks.slice(b, b + 500).map(c => JSON.stringify(c)).join("\n") + "\n");
+      }
+    } finally { await ch.close(); }
     const buf = Buffer.alloc(vectors.length * meta.dim * 4);
     vectors.forEach((v, i) => { Buffer.from(v.buffer, v.byteOffset, meta.dim * 4).copy(buf, i * meta.dim * 4); });
     await fs.writeFile(path.join(tmp, "vectors.f32"), buf);

@@ -175,7 +175,10 @@ test("ui: the engine is cached across requests and a re-index invalidates it", a
   try {
     await fs.writeFile(path.join(dir, "a.ts"), "export function alphaCache(): number { return 1; }\n");
     await indexRepo(dir, new HashingEmbedder());
-    const server = createUiServer(dir, { embedder: new HashingEmbedder() });
+    const server = createUiServer(dir, {
+      embedder: new HashingEmbedder(),
+      indexRunner: (onLine, full) => indexRepo(dir, new HashingEmbedder(), onLine, { full }),
+    });
     await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
@@ -199,6 +202,34 @@ test("ui: the engine is cached across requests and a re-index invalidates it", a
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
+test("ui: a failed reindex surfaces a visible error and leaves the server serving", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-uifail-"));
+  try {
+    await fs.writeFile(path.join(dir, "a.ts"), "export function alphaFail(): number { return 1; }\n");
+    await indexRepo(dir, new HashingEmbedder());
+    const server = createUiServer(dir, {
+      embedder: new HashingEmbedder(),
+      indexRunner: async () => { throw new Error("index worker was killed (SIGKILL) - simulated"); },
+    });
+    await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const re = await fetch(`${base}/api/index`, { method: "POST" });
+      assert.equal(re.status, 202);
+      let st: any = null;
+      for (let i = 0; i < 50; i++) {
+        st = await (await fetch(`${base}/api/index-status`)).json() as any;
+        if (!st.running) break;
+        await new Promise(r => setTimeout(r, 50));
+      }
+      assert.ok(st.error?.includes("killed (SIGKILL)"), "the worker failure is visible in /api/index-status");
+      // The previous index is still searchable after the failed run.
+      const hits = await (await fetch(`${base}/api/search?q=alphaFail`)).json() as any;
+      assert.ok(hits.hits.length > 0, "previous index keeps serving after a failed reindex");
+    } finally { await new Promise<void>(r => server.close(() => r())); }
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 test("ui: a second reindex during a running one is a 409, not a pile-up", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-ui-"));
   try {
@@ -210,7 +241,7 @@ test("ui: a second reindex during a running one is a 409, not a pile-up", async 
       kind: "local-hashing-lexical", dim: 1024,
       embed: async texts => { await gate; return new HashingEmbedder().embed(texts); },
     };
-    const server = createUiServer(dir, { embedder: slow });
+    const server = createUiServer(dir, { embedder: slow, indexRunner: (onLine, full) => indexRepo(dir, slow, onLine, { full }) });
     await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {

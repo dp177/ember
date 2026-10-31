@@ -5,11 +5,13 @@
  * only from inside the indexed repo root. */
 
 import * as http from "node:http";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { embedderChoiceFromEnv, embedderFromEnv } from "../core/embedder.js";
 import { EmberEngine } from "../core/engine.js";
-import { indexRepo, readCheckpointInfo } from "../core/indexer.js";
+import { readCheckpointInfo } from "../core/indexer.js";
 import { EmberStore } from "../core/store.js";
 import { mtimeDrift } from "../core/freshness.js";
 import { NoteStore } from "../core/notes.js";
@@ -22,6 +24,53 @@ export interface UiOptions {
   hybrid?: boolean;
   /** Test/embedder override; production resolves embedderChoiceFromEnv. */
   embedder?: import("../core/embedder.js").Embedder;
+  /** Test override for the reindex execution; production uses a child process. */
+  indexRunner?: IndexRunner;
+}
+
+/** Runs one reindex and reports progress lines; resolves with the result. */
+export type IndexRunner = (onLine: (line: string) => void, full: boolean) => Promise<{ chunks: number; files: number }>;
+
+/** Production reindex runs as a child process. An in-process run shares the
+ * server's address space, so a large embed phase can take the whole UI down
+ * with it and the panel cannot even show the failure (measured: a 14,905-chunk
+ * semantic reindex on the vite repo grew the server's RSS past 1.6 GB on a
+ * 2 GB machine; the process died with ~160 MB free). As a child, the server
+ * keeps serving the previous index during the run, and a dead worker becomes
+ * a visible, resumable error in the panel instead of a vanished server. */
+function childIndexRunner(root: string): IndexRunner {
+  const cli = fileURLToPath(new URL("../cli.js", import.meta.url));
+  return (onLine, full) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cli, "index", ...(full ? ["--full"] : [])], {
+      cwd: root,
+      env: { ...process.env, EMBER_INDEX_RESULT_JSON: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let result: { chunks: number; files: number } | null = null;
+    const feed = (buf: string, chunk: string): string => {
+      buf += chunk;
+      let i: number;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+        if (line.startsWith("EMBER_RESULT_JSON:")) { try { result = JSON.parse(line.slice(18)); } catch { /* ignore */ } }
+        else if (line.trim()) onLine(line);
+      }
+      return buf;
+    };
+    let outBuf = "", errBuf = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", d => { outBuf = feed(outBuf, d); });
+    child.stderr.on("data", d => { errBuf = feed(errBuf, d); });
+    child.on("error", reject);
+    child.on("close", (code, signal) => {
+      if (code === 0) resolve(result ?? { chunks: 0, files: 0 });
+      else reject(new Error(
+        signal
+          ? `index worker was killed (${signal}) - the OS terminates memory-heavy runs this way; the run is resumable: press Reindex to continue`
+          : `index worker exited with code ${code}; the run is resumable: press Reindex to continue`));
+    });
+  });
 }
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
@@ -132,14 +181,10 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
         const run: IndexRun = { startedAt: new Date().toISOString(), lines: [], done: false };
         indexRun = run;
         const full = url.searchParams.get("full") === "1";
+        const runner = opts.indexRunner ?? childIndexRunner(root);
         void (async () => {
           try {
-            const r = await indexRepo(
-              root,
-              opts.embedder ?? embedderFromEnv(process.env, JsonlUsageLogger.forRepo(root)),
-              m => { run.lines.push(m); if (run.lines.length > 100) run.lines.splice(0, run.lines.length - 100); },
-              { full },
-            );
+            const r = await runner(m => { run.lines.push(m); if (run.lines.length > 100) run.lines.splice(0, run.lines.length - 100); }, full);
             cached = null; // next request loads the fresh index
             run.result = r;
           } catch (e) {

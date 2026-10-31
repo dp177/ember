@@ -34,7 +34,14 @@ async function writeCheckpoint(root: string, cp: Checkpoint, chunks: ChunkRecord
   await fs.rm(tmp, { recursive: true, force: true });
   await fs.mkdir(tmp, { recursive: true });
   await fs.writeFile(`${tmp}/checkpoint.json`, JSON.stringify(cp));
-  await fs.writeFile(`${tmp}/chunks.jsonl`, chunks.map(c => JSON.stringify(c)).join("\n") + "\n");
+  // Batched writes: one joined string of every chunk is a transient copy of
+  // the whole corpus in memory (~150 MB at 14,905 chunks), repeated per checkpoint.
+  const ch = await fs.open(`${tmp}/chunks.jsonl`, "w");
+  try {
+    for (let b = 0; b < chunks.length; b += 500) {
+      await ch.write(chunks.slice(b, b + 500).map(c => JSON.stringify(c)).join("\n") + "\n");
+    }
+  } finally { await ch.close(); }
   const buf = Buffer.alloc(vectors.length * cp.dim * 4);
   vectors.forEach((v, i) => { Buffer.from(v.buffer, v.byteOffset, cp.dim * 4).copy(buf, i * cp.dim * 4); });
   await fs.writeFile(`${tmp}/vectors.f32`, buf);
@@ -167,6 +174,14 @@ export async function indexRepo(
   const changed = files.filter(f => oldHashes[f.relPath]?.sha1 !== newHashes[f.relPath].sha1);
   log(`${files.length} files: ${files.length - changed.length} unchanged (${kept.length} chunks kept), ${changed.length} new/changed`);
 
+  // Peak-RSS control before the embed phase: everything still needed from
+  // the previous index was copied into kept/keptVectors, and file contents
+  // are re-chunked below into freshByFile. Measured: a 14,905-chunk repo
+  // holds ~150 MB of chunk records per live copy, so the stale copies matter.
+  oldChunks = [];
+  oldVectors = null;
+  oldHashes = {};
+
   // Reassign sequential ids; vectors stay aligned with chunks.
   const chunks: ChunkRecord[] = [];
   const vectors: Float32Array[] = [];
@@ -187,6 +202,8 @@ export async function indexRepo(
     if (fc.length > 0) freshByFile.push({ file: f.relPath, chunks: fc });
   }
   const freshTotal = freshByFile.reduce((n, f) => n + f.chunks.length, 0);
+  // Free the scanned file contents: chunk texts are all the embed phase needs.
+  for (const f of files) f.content = "";
 
   if (freshByFile.length > 0) {
     log(`embedding ${freshTotal} new/changed chunks from ${freshByFile.length} files (${embedder.kind}) ...`);
