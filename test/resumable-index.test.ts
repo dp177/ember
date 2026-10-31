@@ -156,6 +156,26 @@ test("default cadence: early first checkpoint at 50 files, progress every 100, c
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
+test("time-based checkpoint cadence saves progress on slow runs (EMBER_CHECKPOINT_MS)", async () => {
+  const dir = await mkrepo(6);
+  try {
+    process.env.EMBER_CHECKPOINT_MS = "1";
+    process.env.EMBER_CHECKPOINT_FILES = "100000"; // file/chunk cadences must not fire
+    process.env.EMBER_CHECKPOINT_CHUNKS = "100000";
+    // Slightly slow embedder: the instant HashingEmbedder can finish all
+    // files inside 1 ms, making the time cadence racy by construction.
+    const slow = { kind: "local-hashing-lexical", dim: 1024, embed: async (texts: string[]) => { await new Promise(r => setTimeout(r, 5)); return new HashingEmbedder().embed(texts); } };
+    const logs: string[] = [];
+    await indexRepo(dir, slow, m => logs.push(m));
+    assert.ok(logs.some(m => m.includes("checkpoint saved")), "time cadence alone triggers checkpoints");
+  } finally {
+    delete process.env.EMBER_CHECKPOINT_MS;
+    delete process.env.EMBER_CHECKPOINT_FILES;
+    delete process.env.EMBER_CHECKPOINT_CHUNKS;
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("readCheckpointInfo reports an interrupted run and clears with it", async () => {
   const dir = await mkrepo(6);
   try {

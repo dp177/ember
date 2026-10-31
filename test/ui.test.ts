@@ -209,7 +209,7 @@ test("ui: a failed reindex surfaces a visible error and leaves the server servin
     await indexRepo(dir, new HashingEmbedder());
     const server = createUiServer(dir, {
       embedder: new HashingEmbedder(),
-      indexRunner: async () => { throw new Error("index worker was killed (SIGKILL) - simulated"); },
+      indexRunner: async () => { throw new Error("index worker terminated (SIGKILL); cause unknown - simulated"); },
     });
     await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -222,7 +222,7 @@ test("ui: a failed reindex surfaces a visible error and leaves the server servin
         if (!st.running) break;
         await new Promise(r => setTimeout(r, 50));
       }
-      assert.ok(st.error?.includes("killed (SIGKILL)"), "the worker failure is visible in /api/index-status");
+      assert.ok(st.error?.includes("terminated (SIGKILL)"), "the worker failure is visible in /api/index-status");
       // The previous index is still searchable after the failed run.
       const hits = await (await fetch(`${base}/api/search?q=alphaFail`)).json() as any;
       assert.ok(hits.hits.length > 0, "previous index keeps serving after a failed reindex");

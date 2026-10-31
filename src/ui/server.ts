@@ -67,7 +67,7 @@ function childIndexRunner(root: string): IndexRunner {
       if (code === 0) resolve(result ?? { chunks: 0, files: 0 });
       else reject(new Error(
         signal
-          ? `index worker was killed (${signal}) - the OS terminates memory-heavy runs this way; the run is resumable: press Reindex to continue`
+          ? `index worker terminated (${signal}); cause unknown - possibilities include the OS killing a memory-heavy process or a direct kill; the run is resumable: press Reindex to continue`
           : `index worker exited with code ${code}; the run is resumable: press Reindex to continue`));
     });
   });

@@ -243,9 +243,16 @@ export async function indexRepo(
     const PROGRESS_EVERY_FILES = parseInt(process.env.EMBER_PROGRESS_FILES ?? "", 10) || 100;
     // First checkpoint comes early (50 files / 500 chunks): a killed run then
     // resumes close to the death point instead of from zero. Later checkpoints
-    // stay on the normal cadence. Per-file atomicity is unchanged: a file's
-    // hash enters the checkpoint only after all its chunks are resolved.
+    // stay on the normal cadence, plus a time-based cadence (default 30s,
+    // EMBER_CHECKPOINT_MS) so slow large-corpus runs never lose more than
+    // ~30s of embedding to a kill - measured motivation: on a 2-core/2 GB
+    // box embedding runs at ~14 chunks/s, so the 2000-chunk cadence meant
+    // ~2 minutes of lost work per interruption. Per-file atomicity is
+    // unchanged: a file's hash enters the checkpoint only after all its
+    // chunks are resolved.
     let wroteEarlyCheckpoint = false;
+    const CHECKPOINT_MS = parseInt(process.env.EMBER_CHECKPOINT_MS ?? "", 10) || 30000;
+    let lastCheckpointAt = Date.now();
     for (const { file, chunks: fc } of freshByFile) {
       const inputs = fc.map(embedInput);
       // Resolve each chunk from the reuse map first; embed only the rest.
@@ -265,9 +272,11 @@ export async function indexRepo(
       processedHashes[file] = newHashes[file];
       doneFiles++; doneChunks += fc.length; sinceCheckpoint += fc.length; sinceProgress += fc.length;
       const earlyDue = !wroteEarlyCheckpoint && (doneFiles >= 50 || sinceCheckpoint >= 500);
-      if (earlyDue || doneFiles % CHECKPOINT_EVERY_FILES === 0 || sinceCheckpoint >= CHECKPOINT_EVERY_CHUNKS) {
+      const timeDue = Date.now() - lastCheckpointAt >= CHECKPOINT_MS;
+      if (earlyDue || timeDue || doneFiles % CHECKPOINT_EVERY_FILES === 0 || sinceCheckpoint >= CHECKPOINT_EVERY_CHUNKS) {
         await writeCheckpoint(root, { embedderKind: embedder.kind, dim: embedder.dim, hashes: processedHashes, chunkCount: chunks.length }, chunks, vectors);
         wroteEarlyCheckpoint = true;
+        lastCheckpointAt = Date.now();
         sinceCheckpoint = 0; sinceProgress = 0;
         log(`processed ${doneChunks}/${freshTotal} chunks (${doneFiles}/${freshByFile.length} files, ${embeddedSoFar} newly embedded) - checkpoint saved`);
       } else if (doneFiles % PROGRESS_EVERY_FILES === 0) {
