@@ -1,74 +1,204 @@
-import { loadDemoIndex, demoSearch, createWasmEmbedder } from "./search-core.js";
+import { loadDemoIndex, demoSearch, createWasmEmbedder, buildDemoIndexFromChunks } from "./search-core.js";
 import { parseGitHubUrl } from "../src/ui/github-url.js";
 import { fetchAndChunk } from "./repo-loader.js";
-import { buildDemoIndexFromChunks } from "./search-core.js";
+import { loadRecents, recordRecent, recentRepoUrl } from "./recent-repos.js";
 const $ = (id) => document.getElementById(id);
 function setStatus(msg) { $("status").textContent = msg; }
-let active;
 let builtin;
+let active;
+let hits = [];
+let selected = -1;
+function modelTag(d) {
+    // "local-wasm:Xenova/all-MiniLM-L6-v2" -> "local-wasm all-MiniLM-L6-v2"
+    return d.meta.embedderKind.replace("local-wasm:", "local-wasm ").split("/").pop();
+}
 function hitUrl(d, file, line) {
     return d.source.kind === "github"
         ? `https://github.com/${d.source.label}/blob/${d.source.branch ?? "main"}/${file.split("/").map(encodeURIComponent).join("/")}#L${line}`
         : `https://github.com/dp177/ember/blob/main/${encodeURIComponent(file)}#L${line}`;
 }
-function renderHit(d, h, n) {
-    const div = document.createElement("div");
-    div.className = "hit";
-    const head = document.createElement("div");
-    head.className = "hit-head";
-    head.textContent = `[${n}] ${h.chunk.file}:${h.chunk.startLine}-${h.chunk.endLine}` +
-        (h.chunk.symbol ? ` (${h.chunk.symbol})` : "") + `  score=${h.score.toFixed(3)}`;
+// ---- left pane: sources + recent repos (all real: built-in index, the
+// repo actually loaded, and repos the visitor actually loaded before) ----
+function srcButton(opts) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "src" + (opts.on ? " on" : "");
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = opts.name;
+    const kind = document.createElement("span");
+    kind.className = "kind";
+    kind.textContent = opts.kind;
+    name.appendChild(kind);
+    const sub = document.createElement("span");
+    sub.className = "sub";
+    sub.textContent = opts.sub;
+    b.append(name, sub);
+    b.addEventListener("click", opts.onClick);
+    return b;
+}
+function renderSources() {
+    const el = $("sources");
+    el.textContent = "";
+    const h = document.createElement("h4");
+    h.textContent = "Sources";
+    el.appendChild(h);
+    el.appendChild(srcButton({
+        name: "dp177/ember",
+        kind: "built-in",
+        sub: `${builtin.meta.chunkCount} chunks · ${builtin.meta.fileCount} files`,
+        on: active === builtin,
+        onClick: () => {
+            if (active === builtin)
+                return;
+            active = builtin;
+            hits = [];
+            selected = -1;
+            renderAll();
+            setStatus("back to the built-in dp177/ember index.");
+        },
+    }));
+    if (active.source.kind === "github") {
+        el.appendChild(srcButton({
+            name: active.source.label,
+            kind: `@${active.source.branch ?? "main"}`,
+            sub: `${active.meta.chunkCount} chunks · ${active.meta.fileCount} files · github`,
+            on: true,
+            onClick: () => { },
+        }));
+    }
+    const recents = loadRecents(window.localStorage);
+    if (recents.length) {
+        const h2 = document.createElement("h4");
+        h2.textContent = "Recent repos";
+        el.appendChild(h2);
+        for (const r of recents) {
+            const isActive = active.source.kind === "github" &&
+                active.source.label === r.label && (active.source.branch ?? "main") === r.branch;
+            el.appendChild(srcButton({
+                name: r.label,
+                kind: `@${r.branch}`,
+                sub: `${r.chunkCount} chunks · loaded ${r.loadedAt.slice(0, 10)}`,
+                on: isActive,
+                onClick: () => void loadRepoUrl(recentRepoUrl(r)),
+            }));
+        }
+    }
+    const note = document.createElement("div");
+    note.className = "note";
+    note.textContent = "Repos load from GitHub's public API. The recent list stays in your browser's local storage - nothing is sent anywhere.";
+    el.appendChild(note);
+}
+// ---- middle pane: search + dense results ----
+function renderResults() {
+    const out = $("results");
+    out.textContent = "";
+    if (!hits.length)
+        return;
+    hits.forEach((h, i) => {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "row" + (i === selected ? " on" : "");
+        const n = document.createElement("span");
+        n.className = "n";
+        n.textContent = `[${i + 1}]`;
+        const f = document.createElement("span");
+        f.className = "f";
+        f.textContent = `${h.chunk.file}:${h.chunk.startLine}-${h.chunk.endLine} `;
+        if (h.chunk.symbol) {
+            const sym = document.createElement("small");
+            sym.textContent = h.chunk.symbol;
+            f.appendChild(sym);
+        }
+        const s = document.createElement("span");
+        s.className = "s";
+        s.textContent = h.score.toFixed(3);
+        row.append(n, f, s);
+        row.addEventListener("click", () => selectHit(i));
+        out.appendChild(row);
+    });
+}
+// ---- right pane: full-chunk context preview ----
+function renderPreview() {
+    const el = $("preview");
+    el.textContent = "";
+    const h = document.createElement("h4");
+    h.textContent = "Context preview";
+    el.appendChild(h);
+    const hit = selected >= 0 ? hits[selected] : undefined;
+    if (!hit) {
+        const p = document.createElement("div");
+        p.className = "empty";
+        p.textContent = "Search, then pick a result to read the full chunk here.";
+        el.appendChild(p);
+        return;
+    }
+    const file = document.createElement("div");
+    file.id = "pvFile";
+    file.textContent = `${hit.chunk.file} · lines ${hit.chunk.startLine}-${hit.chunk.endLine}` +
+        (hit.chunk.symbol ? ` · ${hit.chunk.symbol}` : "");
     const pre = document.createElement("pre");
-    pre.textContent = h.chunk.text.split("\n").slice(0, 8).join("\n");
+    pre.id = "pvCode";
+    const lines = hit.chunk.text.split("\n");
+    lines.forEach((text, i) => {
+        const ln = document.createElement("span");
+        ln.className = "ln";
+        ln.textContent = String(hit.chunk.startLine + i);
+        pre.append(ln, document.createTextNode(text + (i < lines.length - 1 ? "\n" : "")));
+    });
+    const meta = document.createElement("div");
+    meta.id = "pvMeta";
+    const score = document.createElement("span");
+    score.textContent = `score ${hit.score.toFixed(3)}`;
     const link = document.createElement("a");
-    link.textContent = "view on GitHub";
-    link.href = hitUrl(d, h.chunk.file, h.chunk.startLine);
+    link.textContent = "view on GitHub ↗";
+    link.href = hitUrl(active, hit.chunk.file, hit.chunk.startLine);
     link.target = "_blank";
     link.rel = "noopener noreferrer";
-    div.append(head, pre, link);
-    return div;
+    meta.append(score, link);
+    el.append(file, pre, meta);
 }
-function renderStats(d) {
-    const files = [...new Set(d.chunks.map(c => c.file))];
-    const langs = new Map();
-    for (const f of files) {
-        const ext = f.split(".").pop() ?? "?";
-        langs.set(ext, (langs.get(ext) ?? 0) + 1);
-    }
-    const langStr = [...langs.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}(${v})`).join(", ");
-    const src = d.source.kind === "github" ? `github: ${d.source.label}` : `built-in index of dp177/ember`;
-    $("stats").textContent =
-        `${src}: ${d.meta.chunkCount} chunks / ${d.meta.fileCount} files, ${langStr}, ` +
-            `embedder=${d.meta.embedderKind} (dim ${d.meta.dim})` +
-            (d.source.kind === "builtin" ? `, built ${d.meta.updatedAt.slice(0, 10)}.` : ".") +
-            ` Search runs entirely in your browser - local semantic retrieval, no server, no account.`;
-    $("resetBtn").classList.toggle("hidden", d.source.kind === "builtin");
+function renderHeaderStats() {
+    $("hdrStats").textContent = `${active.meta.chunkCount} chunks · ${modelTag(active)}`;
+}
+function renderAll() {
+    renderSources();
+    renderResults();
+    renderPreview();
+    renderHeaderStats();
+}
+function selectHit(i) {
+    selected = i;
+    renderResults();
+    renderPreview();
 }
 async function runSearch() {
     const input = $("q");
     const q = input.value.trim();
-    const out = $("results");
-    out.textContent = "";
+    hits = [];
+    selected = -1;
+    renderResults();
+    renderPreview();
     if (!q || !active)
         return;
     setStatus("searching ...");
     try {
-        const hits = await demoSearch(active, q, 8);
-        setStatus(hits.length ? "" : "no hits - try different terms");
-        hits.forEach((h, i) => out.appendChild(renderHit(active, h, i + 1)));
+        hits = await demoSearch(active, q, 8);
+        if (!hits.length) {
+            setStatus("no hits - try different terms");
+            return;
+        }
+        setStatus(`${hits.length} ranked chunks - retrieval, not an answer · semantic, local`);
+        selectHit(0);
     }
     catch (e) {
         setStatus(`search failed: ${e instanceof Error ? e.message : String(e)}`);
     }
 }
-async function loadRepo() {
+async function loadRepoUrl(url) {
     const input = $("repoUrl");
     const btn = $("repoBtn");
-    const url = input.value.trim();
-    if (!url) {
-        setStatus("paste a GitHub repo URL first, e.g. https://github.com/sindresorhus/parse-json");
-        return;
-    }
+    input.value = url;
     let repo;
     try {
         repo = parseGitHubUrl(url);
@@ -78,18 +208,28 @@ async function loadRepo() {
         return;
     }
     btn.disabled = true;
-    $("results").textContent = ""; // never show the previous repo's hits under a new name
+    hits = [];
+    selected = -1;
+    renderResults();
+    renderPreview(); // never show the previous repo's hits under a new name
     try {
         const loaded = await fetchAndChunk(repo, setStatus);
         setStatus(`embedding ${loaded.chunks.length} chunks from ${loaded.files} files (local WASM, in your browser)...`);
         const d = await buildDemoIndexFromChunks(loaded.chunks, builtin.embedder, { kind: "github", label: repo.label, branch: loaded.branch }, setStatus);
         active = d;
-        renderStats(d);
+        const rec = {
+            label: repo.label, branch: loaded.branch,
+            chunkCount: d.meta.chunkCount, fileCount: d.meta.fileCount,
+            loadedAt: new Date().toISOString(),
+        };
+        recordRecent(window.localStorage, rec);
+        renderAll();
         setStatus(`loaded ${repo.label}: ${d.meta.chunkCount} chunks from ${d.meta.fileCount} files${loaded.bounded ? " (bounded - see earlier note)" : ""}. Search now runs against this repo.`);
         $("q").focus();
     }
     catch (e) {
         setStatus(`cannot load repo: ${e instanceof Error ? e.message : String(e)}`);
+        renderAll();
     }
     finally {
         btn.disabled = false;
@@ -100,19 +240,41 @@ async function boot() {
         setStatus("loading index artifacts ...");
         builtin = await loadDemoIndex("data", (model) => createWasmEmbedder(model, setStatus));
         active = builtin;
-        renderStats(active);
+        renderAll();
         setStatus("");
         $("form").addEventListener("submit", e => { e.preventDefault(); void runSearch(); });
-        $("repoBtn").addEventListener("click", () => void loadRepo());
-        $("repoUrl").addEventListener("keydown", e => { if (e.key === "Enter") {
-            e.preventDefault();
-            void loadRepo();
-        } });
-        $("resetBtn").addEventListener("click", () => { active = builtin; renderStats(active); $("results").textContent = ""; setStatus("back to the built-in dp177/ember index."); });
+        $("repoBtn").addEventListener("click", () => {
+            const url = $("repoUrl").value.trim();
+            if (!url) {
+                setStatus("paste a GitHub repo URL first, e.g. https://github.com/sindresorhus/parse-json");
+                return;
+            }
+            void loadRepoUrl(url);
+        });
+        $("repoUrl").addEventListener("keydown", e => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                const url = $("repoUrl").value.trim();
+                if (url)
+                    void loadRepoUrl(url);
+            }
+        });
+        // Up/down moves the result selection when not typing in a field.
+        document.addEventListener("keydown", e => {
+            if (e.target?.tagName === "INPUT")
+                return;
+            if (e.key === "ArrowDown" && selected + 1 < hits.length) {
+                e.preventDefault();
+                selectHit(selected + 1);
+            }
+            if (e.key === "ArrowUp" && selected > 0) {
+                e.preventDefault();
+                selectHit(selected - 1);
+            }
+        });
         const params = new URLSearchParams(location.search);
-        const input = $("q");
         if (params.get("q")) {
-            input.value = params.get("q");
+            $("q").value = params.get("q");
             void runSearch();
         }
     }

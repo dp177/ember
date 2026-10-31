@@ -6,44 +6,91 @@
 <title>Ember - live demo</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ctext y=%2713%27 font-size=%2713%27%3E%F0%9F%94%A5%3C/text%3E%3C/svg%3E">
 <style>
-  :root { color-scheme: light; }
-  body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; max-width: 56em; margin: 0 auto; padding: 1.5em 1em; color: #1c1917; }
-  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
-  .sub { color: #57534e; font-size: 0.9em; margin-bottom: 1.2em; }
-  #stats { background: #fffbeb; border: 1px solid #fde68a; padding: 0.8em; font-size: 0.85em; border-radius: 6px; }
-  form, .repo-bar { margin: 1.2em 0 0.4em; display: flex; gap: 0.5em; }
-  .repo-bar { margin-top: 0.6em; }
-  input { flex: 1; font: inherit; padding: 0.5em; border: 1px solid #d6d3d1; border-radius: 6px; }
-  button { font: inherit; padding: 0.5em 1.2em; background: #1c1917; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
-  button.ghost { background: #fff; color: #1c1917; border: 1px solid #d6d3d1; }
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; background: #161310; color: #e8dfd2; }
+  a { color: #7fb4ff; }
+  button { font: inherit; cursor: pointer; }
+  input { font: inherit; }
+
+  header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #1c1814; border-bottom: 1px solid #2e271c; }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: bold; font-size: 16px; color: #ffb454; white-space: nowrap; }
+  .brand small { color: #9a8a70; font-weight: normal; font-size: 11px; }
+  #repoUrl { flex: 1; min-width: 0; max-width: 460px; background: #100d0b; border: 1px solid #3a3226; color: #e8dfd2; padding: 7px 10px; border-radius: 6px; }
+  #repoUrl:focus { outline: 1px solid #ffb454; }
+  #repoBtn { background: #ffb454; color: #201305; font-weight: bold; border: 0; padding: 7px 16px; border-radius: 6px; white-space: nowrap; }
   button:disabled { opacity: 0.5; cursor: default; }
-  #status { color: #b45309; font-size: 0.85em; min-height: 1.4em; white-space: pre-wrap; }
-  .hidden { display: none; }
-  .hit { margin: 1em 0; border: 1px solid #e7e5e4; border-radius: 6px; padding: 0.8em; }
-  .hit-head { font-weight: bold; font-size: 0.85em; margin-bottom: 0.4em; }
-  pre { background: #f5f5f4; padding: 0.6em; overflow-x: auto; font-size: 0.8em; border-radius: 4px; white-space: pre-wrap; word-break: break-word; }
-  a { color: #1d4ed8; font-size: 0.8em; }
-  footer { margin-top: 2em; color: #78716c; font-size: 0.8em; }
+  #hdrStats { margin-left: auto; color: #9a8a70; font-size: 12px; white-space: nowrap; }
+
+  main { display: grid; grid-template-columns: 230px 1fr 400px; height: calc(100vh - 49px); }
+
+  aside { border-right: 1px solid #2e271c; background: #191512; padding: 10px 8px; overflow-y: auto; }
+  aside h4, #preview h4 { margin: 8px 6px 6px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #8a7a5c; font-weight: bold; }
+  .src { display: block; width: 100%; text-align: left; background: none; border: 1px solid transparent; border-radius: 6px; padding: 6px 8px; color: #d8cfbe; margin-bottom: 2px; }
+  .src:hover { background: #241e17; }
+  .src.on { background: #2c2417; border-color: #4a3a1e; }
+  .src .name { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .src .name .kind { color: #8a7a5c; font-size: 11px; float: right; }
+  .src .sub { display: block; color: #8a7a5c; font-size: 11px; }
+  .src.on .name { color: #ffc46b; }
+  aside .note { color: #6f6350; font-size: 11px; margin: 10px 6px; }
+
+  #mid { padding: 12px 16px; overflow-y: auto; }
+  #form { display: flex; gap: 8px; margin-bottom: 4px; }
+  #q { flex: 1; min-width: 0; background: #100d0b; border: 1px solid #3a3226; color: #e8dfd2; padding: 8px 10px; border-radius: 6px; }
+  #q:focus { outline: 1px solid #ffb454; }
+  #searchBtn { background: #ffb454; color: #201305; font-weight: bold; border: 0; padding: 8px 18px; border-radius: 6px; }
+  #status { color: #d9a04a; font-size: 12px; min-height: 1.6em; white-space: pre-wrap; margin: 4px 2px 8px; }
+  .row { display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left; background: none; border: 1px solid transparent; border-left: 2px solid transparent; padding: 7px 8px; color: #d8cfbe; border-radius: 4px; }
+  .row:hover { background: #241e17; }
+  .row.on { background: #2c2417; border-left-color: #ffb454; }
+  .row .n { color: #ffb454; font-size: 12px; }
+  .row .f { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .row .f small { color: #8a7a5c; }
+  .row .s { color: #9a8a70; font-size: 12px; }
+  .empty { color: #6f6350; font-size: 12px; margin: 18px 8px; }
+
+  #preview { border-left: 1px solid #2e271c; background: #191512; padding: 10px 12px; overflow-y: auto; }
+  #pvFile { color: #9ec1ff; font-size: 12px; margin: 0 6px 8px; overflow-wrap: anywhere; }
+  #pvCode { background: #100d0b; border: 1px solid #2e271c; border-radius: 6px; padding: 8px; font-size: 12px; white-space: pre-wrap; word-break: break-word; overflow-x: auto; margin: 0 0 8px; }
+  #pvCode .ln { color: #5c5142; display: inline-block; min-width: 2.2em; user-select: none; }
+  #pvMeta { display: flex; align-items: center; gap: 10px; margin: 0 6px 8px; font-size: 12px; color: #9a8a70; }
+
+  footer { padding: 10px 14px; border-top: 1px solid #2e271c; color: #6f6350; font-size: 11px; }
+  footer a { color: #8a7a5c; }
+
+  @media (max-width: 960px) {
+    main { grid-template-columns: 1fr; height: auto; }
+    aside { border-right: 0; border-bottom: 1px solid #2e271c; max-height: 220px; }
+    #preview { border-left: 0; border-top: 1px solid #2e271c; }
+    #hdrStats { display: none; }
+    header { flex-wrap: wrap; }
+    #repoUrl { max-width: none; }
+  }
 </style>
 <script type="importmap">{ "imports": { "@xenova/transformers": "./vendor/transformers.min.js" } }</script>
 </head>
 <body>
-<h1>Ember - live demo</h1>
-<div class="sub">Persistent, queryable memory for coding agents. This page runs Ember's real search engine in your browser.</div>
-<div id="stats">loading ...</div>
-<div class="repo-bar">
-  <input id="repoUrl" placeholder="load any public GitHub repo: github.com/owner/repo (or /tree/branch)">
-  <button id="repoBtn" type="button">load repo</button>
-  <button id="resetBtn" type="button" class="ghost hidden">reset</button>
-</div>
-<form id="form"><input id="q" placeholder="search the loaded repo - e.g. how are corrupt index files handled" autofocus><button type="submit">search</button></form>
-<div id="status"></div>
-<div id="results"></div>
+<header>
+  <span class="brand"><svg width="16" height="20" viewBox="0 0 20 24" fill="none" aria-hidden="true"><path d="M10 1c1 4-4 6-4 11a6 6 0 0 0 12 0c0-2-1-3.5-2-5-.5 1.5-1.5 2-2.5 2C14.5 6 12 3.5 10 1z" fill="#ff8c42"/><path d="M10 12c.6 2.4-2.4 3.4-2.4 6a3.4 3.4 0 0 0 6.8 0c0-1.2-.6-2.1-1.2-3-.3.9-.9 1.2-1.5 1.2.6-1.8-.6-3.3-1.7-4.2z" fill="#ffd166"/></svg> Ember <small>live demo</small></span>
+  <input id="repoUrl" placeholder="load any public GitHub repo: github.com/owner/repo (or /tree/branch)" aria-label="GitHub repo URL">
+  <button id="repoBtn" type="button">Load repo</button>
+  <span id="hdrStats"></span>
+</header>
+<main>
+  <aside id="sources" aria-label="Sources and recent repos"></aside>
+  <section id="mid">
+    <form id="form"><input id="q" placeholder="search the loaded repo - e.g. how are corrupt index files handled" autofocus aria-label="Search query"><button id="searchBtn" type="submit">Search</button></form>
+    <div id="status" role="status"></div>
+    <div id="results"></div>
+  </section>
+  <section id="preview" aria-label="Context preview"></section>
+</main>
 <footer>
-  Local semantic retrieval: questions and code are embedded in your browser with the quantized all-MiniLM-L6-v2 WASM model -
-  no server, no account, no API keys, nothing leaves your machine except anonymous fetches to GitHub's public API when you load a repo.
-  Repo loading is public-only and bounded (120 files / 1.2 MB per load; GitHub's anonymous rate limit applies).
-  <a href="https://github.com/dp177/ember">github.com/dp177/ember</a>
+  Local semantic retrieval: questions and code are embedded in your browser with the quantized all-MiniLM-L6-v2 WASM model
+  (~23 MB, downloaded once from Hugging Face's CDN and cached). Loading a repo makes anonymous fetches to GitHub's public API -
+  public repos only, bounded at 120 files / 1.2 MB per load, GitHub's anonymous rate limit applies.
+  No server, no account, no API keys. <a href="https://github.com/dp177/ember">github.com/dp177/ember</a>
 </footer>
 <script type="module" src="./demo-web/main.js"></script>
 </body>
