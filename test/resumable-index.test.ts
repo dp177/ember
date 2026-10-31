@@ -141,7 +141,7 @@ test("embedding progress is logged between checkpoints (log-only, no checkpoint 
   }
 });
 
-test("default progress cadence is 100 files (no env override)", async () => {
+test("default cadence: early first checkpoint at 50 files, progress every 100, checkpoints every 200 (no env override)", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-progress-"));
   try {
     for (let i = 0; i < 205; i++) await fs.writeFile(path.join(dir, `f${i}.ts`), `export function fn${i}(): number { return ${i}; }\n`);
@@ -149,9 +149,10 @@ test("default progress cadence is 100 files (no env override)", async () => {
     await indexRepo(dir, new HashingEmbedder(), m => logs.push(m));
     const progress = logs.filter(m => /^embedded \d+\/\d+ chunks \(\d+\/\d+ files\)( - checkpoint saved)?$/.test(m));
     assert.deepEqual(progress, [
+      "embedded 50/205 chunks (50/205 files) - checkpoint saved",
       "embedded 100/205 chunks (100/205 files)",
       "embedded 200/205 chunks (200/205 files) - checkpoint saved",
-    ], "every 100 files prints progress by default; the 200-file mark is the checkpoint line (same counts)");
+    ], "first checkpoint lands at 50 files so a killed run resumes near the death point; then 100-file progress and 200-file checkpoints");
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 

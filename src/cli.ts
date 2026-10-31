@@ -46,7 +46,7 @@ program.command("index")
     console.log(`indexed ${r.chunks} chunks from ${r.files} files (dim ${r.dim})`);
     // Machine-readable result for the UI server's child-process runner (unset on human runs).
     if (process.env.EMBER_INDEX_RESULT_JSON === "1") console.log("EMBER_RESULT_JSON:" + JSON.stringify({ chunks: r.chunks, files: r.files }));
-    if (r.incremental) console.log(`incremental: reused ${r.kept} chunks from unchanged files, embedded ${r.embedded} new/changed`);
+    if (r.incremental) console.log(`incremental: kept ${r.kept} chunks from unchanged files${r.reused ? `, reused ${r.reused} unchanged chunks inside changed files` : ""}, embedded ${r.embedded} new/changed`);
   });
 
 program.command("search <query>")

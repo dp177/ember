@@ -1,7 +1,8 @@
 /** Index pipeline: scan -> chunk -> embed -> HNSW -> persist.
  * Incremental by default: per-file sha1 in .ember/files.json; unchanged files
- * keep their chunks and vectors, only new/changed files are re-embedded, and
- * chunks from deleted files are dropped. `full` forces a from-scratch rebuild. */
+ * keep their chunks and vectors, changed files are re-chunked but chunks whose
+ * content is unchanged keep their vectors (chunk-level reuse), and chunks from
+ * deleted files are dropped. `full` forces a from-scratch rebuild. */
 
 import { promises as fs } from "node:fs";
 import { createHash } from "node:crypto";
@@ -82,7 +83,9 @@ export interface IndexResult {
   dim: number;
   /** chunks reused from unchanged files (0 on fresh/full builds) */
   kept: number;
-  /** chunks embedded this run */
+  /** chunks inside changed files whose content was unchanged (vector reused) */
+  reused: number;
+  /** chunks actually embedded this run */
   embedded: number;
   /** true when an existing compatible index was reused */
   incremental: boolean;
@@ -174,10 +177,24 @@ export async function indexRepo(
   const changed = files.filter(f => oldHashes[f.relPath]?.sha1 !== newHashes[f.relPath].sha1);
   log(`${files.length} files: ${files.length - changed.length} unchanged (${kept.length} chunks kept), ${changed.length} new/changed`);
 
+  // Chunk-level reuse: re-chunking a changed file rebuilds every chunk of
+  // it, but a chunk whose full embed input (path + symbol + text) is unchanged
+  // keeps its vector. Measured motivation: 241 one-line appends on the vite
+  // repo re-chunked 7,426 chunks of which only ~241 actually needed embedding.
+  const reusableByInputHash = new Map<string, Float32Array>();
+  if (canReuse) {
+    for (const c of oldChunks) {
+      const h = sha1(`${c.file}${c.symbol ? " :: " + c.symbol : ""}\n${c.text}`);
+      if (!reusableByInputHash.has(h)) {
+        const v = oldVectors!.get(c.id);
+        if (v) reusableByInputHash.set(h, v);
+      }
+    }
+  }
+
   // Peak-RSS control before the embed phase: everything still needed from
-  // the previous index was copied into kept/keptVectors, and file contents
-  // are re-chunked below into freshByFile. Measured: a 14,905-chunk repo
-  // holds ~150 MB of chunk records per live copy, so the stale copies matter.
+  // the previous index was copied into kept/keptVectors/reusableByInputHash,
+  // and file contents are re-chunked below into freshByFile.
   oldChunks = [];
   oldVectors = null;
   oldHashes = {};
@@ -205,8 +222,12 @@ export async function indexRepo(
   // Free the scanned file contents: chunk texts are all the embed phase needs.
   for (const f of files) f.content = "";
 
+  const embedInput = (c: CodeChunk): string => `${c.file}${c.symbol ? " :: " + c.symbol : ""}\n${c.text}`;
+  let chunkReuse = 0;
+  for (const f of freshByFile) for (const c of f.chunks) if (reusableByInputHash.has(sha1(embedInput(c)))) chunkReuse++;
+
   if (freshByFile.length > 0) {
-    log(`embedding ${freshTotal} new/changed chunks from ${freshByFile.length} files (${embedder.kind}) ...`);
+    log(`embedding ${freshTotal - chunkReuse} new/changed chunks from ${freshByFile.length} files${chunkReuse ? ` (${chunkReuse} unchanged chunks keep their vectors)` : ""} (${embedder.kind}) ...`);
     // Per-file embedding makes every file an atomic resume unit: a file's
     // hash enters the checkpoint only after ALL its chunks are embedded.
     const processedHashes: FileHashMap = {};
@@ -220,18 +241,32 @@ export async function indexRepo(
     // Progress is visible between checkpoints: a long embed no longer sits
     // silent for minutes. Log-only; checkpoints stay on their own cadence.
     const PROGRESS_EVERY_FILES = parseInt(process.env.EMBER_PROGRESS_FILES ?? "", 10) || 100;
+    // First checkpoint comes early (50 files / 500 chunks): a killed run then
+    // resumes close to the death point instead of from zero. Later checkpoints
+    // stay on the normal cadence. Per-file atomicity is unchanged: a file's
+    // hash enters the checkpoint only after all its chunks are resolved.
+    let wroteEarlyCheckpoint = false;
     for (const { file, chunks: fc } of freshByFile) {
-      const inputs = fc.map(c => `${c.file}${c.symbol ? " :: " + c.symbol : ""}\n${c.text}`);
-      const vs = await embedder.embed(inputs);
-      vs.forEach((v, j) => {
+      const inputs = fc.map(embedInput);
+      // Resolve each chunk from the reuse map first; embed only the rest.
+      const resolved: (Float32Array | null)[] = inputs.map(inp => reusableByInputHash.get(sha1(inp)) ?? null);
+      const toEmbed = inputs.filter((_, j) => !resolved[j]);
+      if (toEmbed.length > 0) {
+        const vs = await embedder.embed(toEmbed);
+        let k = 0;
+        for (let j = 0; j < resolved.length; j++) if (!resolved[j]) resolved[j] = vs[k++];
+      }
+      resolved.forEach((v, j) => {
         chunks.push({ ...fc[j], id: chunks.length });
-        vectors.push(v);
-        index?.add(chunks.length - 1, v);
+        vectors.push(v!);
+        index?.add(chunks.length - 1, v!);
       });
       processedHashes[file] = newHashes[file];
       doneFiles++; doneChunks += fc.length; sinceCheckpoint += fc.length; sinceProgress += fc.length;
-      if (doneFiles % CHECKPOINT_EVERY_FILES === 0 || sinceCheckpoint >= CHECKPOINT_EVERY_CHUNKS) {
+      const earlyDue = !wroteEarlyCheckpoint && (doneFiles >= 50 || sinceCheckpoint >= 500);
+      if (earlyDue || doneFiles % CHECKPOINT_EVERY_FILES === 0 || sinceCheckpoint >= CHECKPOINT_EVERY_CHUNKS) {
         await writeCheckpoint(root, { embedderKind: embedder.kind, dim: embedder.dim, hashes: processedHashes, chunkCount: chunks.length }, chunks, vectors);
+        wroteEarlyCheckpoint = true;
         sinceCheckpoint = 0; sinceProgress = 0;
         log(`embedded ${doneChunks}/${freshTotal} chunks (${doneFiles}/${freshByFile.length} files) - checkpoint saved`);
       } else if (doneFiles % PROGRESS_EVERY_FILES === 0) {
@@ -260,7 +295,8 @@ export async function indexRepo(
     chunks: chunks.length,
     dim: embedder.dim,
     kept: kept.length,
-    embedded: freshTotal,
+    reused: chunkReuse,
+    embedded: freshTotal - chunkReuse,
     incremental: canReuse,
     capped: scan.capped,
   };

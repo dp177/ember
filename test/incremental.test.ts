@@ -31,6 +31,22 @@ test("incremental: unchanged files keep chunks, zero re-embedding", async () => 
   await fs.rm(dir, { recursive: true, force: true });
 });
 
+test("incremental: a one-line edit re-embeds only the affected chunks (chunk-level reuse)", async () => {
+  const fns = (n: number): string => Array.from({ length: n }, (_, i) => `export function fn${i}(): number { return ${i}; }`).join("\n") + "\n";
+  const dir = await tmpRepo({ "big.ts": fns(8) });
+  const emb = new HashingEmbedder();
+  const r1 = await indexRepo(dir, emb);
+  assert.ok(r1.chunks >= 4, `multi-chunk fixture (got ${r1.chunks})`);
+  await fs.appendFile(path.join(dir, "big.ts"), "export function fnNew(): number { return 99; }\n");
+  const r2 = await indexRepo(dir, emb);
+  assert.equal(r2.chunks, r2.kept + r2.reused + r2.embedded, "every chunk accounted for");
+  assert.ok(r2.reused >= 1, "unchanged chunks inside the edited file keep their vectors");
+  assert.ok(r2.embedded < r1.chunks, "far less than a whole-file re-embed");
+  const { chunks } = await new EmberStore(dir).load();
+  assert.ok(chunks.some(c => c.text.includes("fnNew")), "new content indexed");
+  await fs.rm(dir, { recursive: true, force: true });
+});
+
 test("incremental: modified file re-chunked, deleted file dropped", async () => {
   const dir = await tmpRepo({
     "a.ts": "export function alpha() { return 1 }\n",
