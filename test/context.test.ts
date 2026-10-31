@@ -47,3 +47,19 @@ test("a missing file is an honest error naming the path", async () => {
     await assert.rejects(() => readSourceContext(dir, "nope.ts", 1, 5), /cannot read nope\.ts/);
   } finally { await cleanup(); }
 });
+
+test("a symlink pointing outside the repo is refused; an inside symlink is followed", async () => {
+  const { dir, cleanup } = await mkfile();
+  const outside = path.join(os.tmpdir(), `ember-secret-${process.pid}.txt`);
+  await fs.writeFile(outside, "secret outside the repo\n");
+  try {
+    await fs.symlink(outside, path.join(dir, "escape.ts"));
+    await assert.rejects(() => readSourceContext(dir, "escape.ts", 1, 5), /escapes the repo root via a symlink/);
+    await fs.symlink(path.join(dir, "a.ts"), path.join(dir, "alias.ts"));
+    const c = await readSourceContext(dir, "alias.ts", 1, 2);
+    assert.deepEqual(c.lines, ["line1", "line2"], "a symlink staying inside the repo is fine");
+  } finally {
+    await fs.rm(outside, { force: true });
+    await cleanup();
+  }
+});

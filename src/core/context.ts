@@ -14,12 +14,20 @@ export interface SourceContext {
 }
 
 export async function readSourceContext(root: string, file: string, startLine: number, endLine: number): Promise<SourceContext> {
-  const absRoot = path.resolve(root);
+  // Jail both lexically AND through symlink resolution: a symlink inside the
+  // repo pointing outside must not leak reads (same rule as the UI server).
+  const absRoot = await fs.realpath(path.resolve(root));
   const abs = path.resolve(absRoot, file);
   if (abs !== absRoot && !abs.startsWith(absRoot + path.sep)) {
     throw new Error(`path escapes the repo root: ${file}`);
   }
-  const raw = await fs.readFile(abs, "utf8").catch(e => {
+  const real = await fs.realpath(abs).catch(e => {
+    throw new Error(`cannot read ${file}: ${e instanceof Error ? e.message : String(e)}`);
+  });
+  if (real !== absRoot && !real.startsWith(absRoot + path.sep)) {
+    throw new Error(`path escapes the repo root via a symlink: ${file}`);
+  }
+  const raw = await fs.readFile(real, "utf8").catch(e => {
     throw new Error(`cannot read ${file}: ${e instanceof Error ? e.message : String(e)}`);
   });
   const all = raw.split("\n");

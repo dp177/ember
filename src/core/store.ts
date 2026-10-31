@@ -219,6 +219,17 @@ export class EmberStore {
   }
 
   private async loadOnce(): Promise<{ meta: IndexMeta; chunks: ChunkRecord[]; index: HnswIndex | null; vectors: Map<number, Float32Array> }> {
+    // A missing index is the normal first-run state, not corruption - say
+    // so. But only when NOTHING index-related exists: leftover backup/tmp
+    // dirs or a lock file mean a writer was here, so the gap is a torn set
+    // (handled by the corrupt-or-incomplete path below), never first-run.
+    if (!(await this.exists())) {
+      const siblings = await fs.readdir(path.dirname(this.dir)).catch(() => [] as string[]);
+      const writerArtifacts = siblings.some(d => d.startsWith(".ember.backup-") || d.startsWith(".ember.tmp-") || d === ".ember.lock");
+      if (!writerArtifacts) {
+        throw new Error(`no index at ${this.dir} - run: ember index`);
+      }
+    }
     try {
       const genPath = path.join(this.dir, "generation");
       const genBefore = await fs.readFile(genPath, "utf8").then(s => s.trim(), () => null);

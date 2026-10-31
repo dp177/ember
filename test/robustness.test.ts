@@ -56,7 +56,8 @@ test("bad queries: empty and whitespace return nothing, a 100KB query does not h
 test("unindexed repo fails honestly and names the fix", async () => {
   const dir = await mkrepo({ "ok.ts": OK });
   try {
-    await assert.rejects(() => EmberEngine.load(dir, new HashingEmbedder()), /ember index --full/);
+    // First run: no index yet -> the guidance is to index, not to rebuild.
+    await assert.rejects(() => EmberEngine.load(dir, new HashingEmbedder()), /no index at .* - run: ember index/);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 

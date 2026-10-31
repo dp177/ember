@@ -209,11 +209,14 @@ routing, caching and discounts on the provider's side._
   when you first enable local semantic embeddings. Ember itself sends no
   telemetry anywhere.
 
+- **A missing index is not "corruption".** First-run `ember search` says
+  "no index at <repo>/.ember - run: ember index"; the corruption wording
+  (with `--full` rebuild guidance) is reserved for a genuinely torn store.
 - **Search results inspect their source.** `ember search --lines N` widens
   chunk output (a truncation marker counts hidden lines and names the
   citation to open), and `--context N` prints N lines of the live file
   around each hit with real line numbers - labeled as live source, which
-  may differ from the indexed chunk. Repo-jailed; escapes are refused.
+  may differ from the indexed chunk. Repo-jailed through symlink resolution - lexical escapes and symlinks pointing outside the repo are both refused.
 - **Long indexing narrates itself.** Progress lines print every 100 files
   (`EMBER_PROGRESS_FILES` overrides) between checkpoints. A first-run model
   download ends with an explicit "model ready" line; if it fails, the error

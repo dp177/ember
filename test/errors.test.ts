@@ -39,6 +39,23 @@ test("notes on a repo with no notes: empty list and zero hits, no crash", async 
   await fs.rm(dir, { recursive: true, force: true });
 });
 
+test("a missing index is a first-run message, not a corruption report", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-err-"));
+  try {
+    // (node tests the regex against String(error), which includes the
+    // "Error: " prefix - so no ^ anchor here.)
+    await assert.rejects(
+      () => EmberEngine.load(dir, new HashingEmbedder(128)),
+      /no index at .* - run: ember index/,
+      "absent meta.json is the normal first-run state",
+    );
+    await assert.rejects(
+      () => EmberEngine.load(dir, new HashingEmbedder(128)),
+      (err: Error) => { assert.ok(!err.message.includes("corrupt"), "not framed as corruption"); return true; },
+    );
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 test("corrupt index store fails with an actionable re-index message", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-err-"));
   await fs.writeFile(path.join(dir, "a.ts"), "export function alpha() { return 1 }\n");
