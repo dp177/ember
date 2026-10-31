@@ -2,8 +2,7 @@
 /** ember - a warm start for coding agents. CLI entry. */
 
 import { Command } from "commander";
-import { createRequire } from "node:module";
-const pkgVersion = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
+import { EMBER_VERSION } from "./core/version.js";
 import * as path from "node:path";
 import { embedderChoiceFromEnv, embedderFromEnv } from "./core/embedder.js";
 import { EmberEngine } from "./core/engine.js";
@@ -24,7 +23,7 @@ const program = new Command();
 program
   .name("ember")
   .description("Ember - a warm start for coding agents: persistent, queryable memory for your codebase.")
-  .version(pkgVersion);
+  .version(EMBER_VERSION);
 
 const rootOf = (p?: string) => path.resolve(p ?? process.cwd());
 const hybridOf = (opts: { hybrid?: boolean }) => ({ hybrid: opts.hybrid || process.env.EMBER_HYBRID === "1" });

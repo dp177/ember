@@ -1,8 +1,6 @@
 /** Ember MCP server: exposes persistent codebase memory to any MCP client
  * (Claude Code, Cursor, or any other MCP-aware client). Transport: stdio. */
 
-import { createRequire } from "node:module";
-const EMBER_VERSION = (createRequire(import.meta.url)("../../package.json") as { version: string }).version;
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -13,6 +11,8 @@ import { EmberEngine } from "../core/engine.js";
 import { indexRepo, readCheckpointInfo } from "../core/indexer.js";
 import { EmberStore } from "../core/store.js";
 import { NoteStore } from "../core/notes.js";
+import { EMBER_VERSION } from "../core/version.js";
+export { EMBER_VERSION };
 import { mtimeDrift } from "../core/freshness.js";
 import { buildRepoMap, formatRepoMap } from "../core/repomap.js";
 import { getCommits, getDecisions } from "../core/decisions.js";
