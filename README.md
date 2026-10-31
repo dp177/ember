@@ -209,6 +209,11 @@ routing, caching and discounts on the provider's side._
   when you first enable local semantic embeddings. Ember itself sends no
   telemetry anywhere.
 
+- **Search results inspect their source.** `ember search --lines N` widens
+  chunk output (a truncation marker counts hidden lines and names the
+  citation to open), and `--context N` prints N lines of the live file
+  around each hit with real line numbers - labeled as live source, which
+  may differ from the indexed chunk. Repo-jailed; escapes are refused.
 - **Long indexing narrates itself.** Progress lines print every 100 files
   (`EMBER_PROGRESS_FILES` overrides) between checkpoints. A first-run model
   download ends with an explicit "model ready" line; if it fails, the error

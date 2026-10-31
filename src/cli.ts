@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { embedderChoiceFromEnv, embedderFromEnv } from "./core/embedder.js";
 import { EmberEngine } from "./core/engine.js";
 import { indexRepo } from "./core/indexer.js";
+import { readSourceContext } from "./core/context.js";
 import { checkFreshness, mtimeDrift } from "./core/freshness.js";
 import { EmberStore } from "./core/store.js";
 import { NoteStore } from "./core/notes.js";
@@ -51,13 +52,27 @@ program.command("search <query>")
   .option("-k <n>", "number of hits", "8")
   .option("--path <dir>", "repo root", ".")
   .option("--hybrid", "experimental: fuse vector ranking with BM25 (EMBER_HYBRID=1)", false)
+  .option("--lines <n>", "lines of each chunk to print", "8")
+  .option("--context <n>", "also print n lines of live file source around each hit", "0")
   .action(async (query, opts) => {
     const root = rootOf(opts.path);
     const engine = await EmberEngine.load(root, cliEmbedder(), hybridOf(opts));
     const hits = await engine.search(query, parseInt(opts.k, 10));
+    const maxLines = parseInt(opts.lines, 10);
+    const context = parseInt(opts.context, 10);
     for (const [i, h] of hits.entries()) {
       console.log(`\n[${i + 1}] ${h.chunk.file}:${h.chunk.startLine}-${h.chunk.endLine}${h.chunk.symbol ? ` (${h.chunk.symbol})` : ""}  score=${h.score.toFixed(3)}`);
-      console.log(h.chunk.text.split("\n").slice(0, 8).join("\n"));
+      const chunkLines = h.chunk.text.split("\n");
+      console.log(chunkLines.slice(0, maxLines).join("\n"));
+      if (chunkLines.length > maxLines) {
+        console.log(`\u2026 (${chunkLines.length - maxLines} more lines in this chunk - widen with --lines, or open ${h.chunk.file}:${h.chunk.startLine})`);
+      }
+      if (context > 0) {
+        const c = await readSourceContext(root, h.chunk.file, h.chunk.startLine - context, h.chunk.endLine + context).catch(e => ({ error: e instanceof Error ? e.message : String(e) }));
+        console.log(`-- live file context (${h.chunk.file}, may differ from the indexed chunk) --`);
+        if ("error" in c) console.log(`   unavailable: ${c.error}`);
+        else c.lines.forEach((l, j) => console.log(`${String(c.startLine + j).padStart(5)}  ${l}`));
+      }
     }
     const drift = await mtimeDrift(new EmberStore(root), root).catch(() => null);
     if (drift && drift > 0) {
