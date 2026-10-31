@@ -29,6 +29,16 @@ async function indexedTmp(): Promise<{ dir: string; engine: EmberEngine }> {
   return { dir, engine: await EmberEngine.load(dir, embedder) };
 }
 
+
+/** Semantic-path engine stub with above-floor hits, for synthesis-mechanics tests. */
+function wasmStub(): EmberEngine {
+  const mk = (file: string, score: number, sym?: string) => ({ score, chunk: { file, startLine: 1, endLine: 5, symbol: sym, text: `export function cosine(a, b) { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }` } });
+  return {
+    embedderKind: "local-wasm:Xenova/all-MiniLM-L6-v2", hybrid: false,
+    async search() { return [mk("vector.ts", 0.55, "cosine"), mk("math.ts", 0.41)]; },
+  } as unknown as EmberEngine;
+}
+
 async function chatServer(reply: string): Promise<{ base: string; close: () => Promise<void> }> {
   const srv = http.createServer((req, res) => {
     let d = ""; req.on("data", c => (d += c));
@@ -40,7 +50,7 @@ async function chatServer(reply: string): Promise<{ base: string; close: () => P
 }
 
 test("ask: synthesized answer keeps valid citations, strips bogus ones, lists sources", async () => {
-  const { dir, engine } = await indexedTmp();
+  const engine = wasmStub();
   const { base, close } = await chatServer("Cosine similarity is a dot product over the vectors [1]. See also [42].");
   const client = new LlmClient({ base, apiKey: "k", chatModel: "m" });
   const out = (await answerQuestion(engine, "how is cosine computed?", 5, { client })).text;
@@ -48,25 +58,24 @@ test("ask: synthesized answer keeps valid citations, strips bogus ones, lists so
   assert.ok(!out.includes("[42]"), "out-of-range citation removed");
   assert.ok(out.includes("stripped 1 citation"), "stripping disclosed");
   assert.ok(out.includes("Sources:") && out.includes("vector.ts"));
-  await close(); await fs.rm(dir, { recursive: true, force: true });
+  await close();
 });
 
 test("ask: model abstention ('chunks do not contain the answer') passes through untouched", async () => {
-  const { dir, engine } = await indexedTmp();
+  const engine = wasmStub();
   const { base, close } = await chatServer("The provided chunks do not contain the answer to that question.");
   const client = new LlmClient({ base, apiKey: "k", chatModel: "m" });
   const out = (await answerQuestion(engine, "what database does it use?", 5, { client })).text;
   assert.ok(out.includes("do not contain the answer"), "abstention preserved verbatim");
-  await close(); await fs.rm(dir, { recursive: true, force: true });
+  await close();
 });
 
 test("ask: chat failure falls back to extractive WITH the failure disclosed", async () => {
-  const { dir, engine } = await indexedTmp();
+  const engine = wasmStub();
   const client = new LlmClient({ base: "http://127.0.0.1:1", apiKey: "k", chatModel: "m" }); // nothing listening
   const out = (await answerQuestion(engine, "how is cosine computed?", 5, { client })).text;
   assert.ok(out.includes("Chat synthesis FAILED"), "failure is disclosed");
   assert.ok(out.includes("vector.ts"), "extractive chunks still returned");
-  await fs.rm(dir, { recursive: true, force: true });
 });
 
 test("ask: no client configured -> plain extractive answer, no failure theater", async () => {
@@ -166,4 +175,58 @@ test("mode-aware evidence gating and disclosures", async () => {
   } as unknown as EmberEngine;
   const r2 = await answerQuestion(lexOnly, "anything", 5);
   assert.match(r2.text, /No chunks scored high enough/, "hits without a calibrated score are not Ask evidence");
+});
+
+test("synthesis context contains ONLY chunks that cleared the floor", async () => {
+  let seen = "";
+  const srv = http.createServer((req, res) => {
+    let d = ""; req.on("data", c => (d += c));
+    req.on("end", () => { seen = d; res.writeHead(200, { "content-type": "application/json", "connection": "close" }); res.end(JSON.stringify({ choices: [{ message: { content: "answer [1]" } }] })); });
+  });
+  await new Promise<void>(r => srv.listen(0, "127.0.0.1", r));
+  const { port } = srv.address() as { port: number };
+  const client = new LlmClient({ base: `http://127.0.0.1:${port}`, apiKey: "k", chatModel: "m" });
+  const mixed = {
+    embedderKind: "local-wasm:m", hybrid: false,
+    async search() { return [
+      { score: 0.5, chunk: { file: "strong.ts", startLine: 1, endLine: 2, text: "STRONG-EVIDENCE-MARKER" } },
+      { score: 0.1, chunk: { file: "weak.ts", startLine: 1, endLine: 2, text: "WEAK-NONEVIDENCE-MARKER" } },
+    ]; },
+  } as unknown as EmberEngine;
+  const r = await answerQuestion(mixed, "q", 5, { client });
+  assert.ok(seen.includes("STRONG-EVIDENCE-MARKER"), "above-floor chunk sent");
+  assert.ok(!seen.includes("WEAK-NONEVIDENCE-MARKER"), "below-floor chunk must not be sent as grounding");
+  assert.ok(!r.text.includes("weak.ts"), "below-floor chunk not listed as a Source");
+  await new Promise<void>(r => { srv.closeAllConnections?.(); srv.close(() => r()); });
+});
+
+test("hybrid: weak underlying cosine skips the chat call (no request sent)", async () => {
+  let called = 0;
+  const srv = http.createServer((req, res) => { called++; res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ choices: [{ message: { content: "x" } }] })); });
+  await new Promise<void>(r => srv.listen(0, "127.0.0.1", r));
+  const { port } = srv.address() as { port: number };
+  const client = new LlmClient({ base: `http://127.0.0.1:${port}`, apiKey: "k", chatModel: "m" });
+  const weakHybrid = {
+    embedderKind: "local-wasm:m", hybrid: true,
+    async search() { return [{ score: 0.017, vectorScore: 0.11, chunk: { file: "a.ts", startLine: 1, endLine: 2, text: "x" } }]; },
+  } as unknown as EmberEngine;
+  await answerQuestion(weakHybrid, "anything", 5, { client });
+  assert.equal(called, 0, "hybrid weak evidence must not reach the chat model");
+  await new Promise<void>(r => { srv.closeAllConnections?.(); srv.close(() => r()); });
+});
+
+test("lexical mode: no automatic synthesis even with a chat model configured", async () => {
+  let called = 0;
+  const srv = http.createServer((req, res) => { called++; res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ choices: [{ message: { content: "x" } }] })); });
+  await new Promise<void>(r => srv.listen(0, "127.0.0.1", r));
+  const { port } = srv.address() as { port: number };
+  const client = new LlmClient({ base: `http://127.0.0.1:${port}`, apiKey: "k", chatModel: "m" });
+  const lex = {
+    embedderKind: "local-hashing-lexical", hybrid: false,
+    async search() { return [{ score: 0.35, chunk: { file: "a.ts", startLine: 1, endLine: 2, text: "x" } }]; },
+  } as unknown as EmberEngine;
+  const r = await answerQuestion(lex, "anything", 5, { client });
+  assert.equal(called, 0, "lexical mode must not auto-synthesize");
+  assert.match(r.text, /synthesis is unsupported/);
+  await new Promise<void>(r => { srv.closeAllConnections?.(); srv.close(() => r()); });
 });

@@ -114,20 +114,27 @@ export async function answerQuestion(
   const envCap = typeof process !== "undefined" ? parseInt(process.env.EMBER_MAX_OUTPUT_TOKENS ?? "", 10) : NaN;
   const maxAnswerTokens = opts.maxAnswerTokens ?? (Number.isFinite(envCap) ? envCap : 1024);
   const client = opts.client ?? null;
-  if (client?.cfg.chatModel && (minScore === 0 || passing.length > 0)) {
-    const context = hits.map((h, i) => `[${i + 1}] ${cite(h)}\n${h.chunk.text}`).join("\n\n---\n\n");
+  // Lexical diagnostic mode: no calibrated floor exists, so no automatic
+  // synthesis - retrieval-only output with the overlap disclosure. Sending
+  // unfiltered lexical scores to a chat model would dress up noise as
+  // grounding. Raw `ember search` is unaffected.
+  const lexicalMode = !engine.embedderKind.startsWith("local-wasm:");
+  if (client?.cfg.chatModel && !lexicalMode && passing.length > 0) {
+    // Only chunks that cleared the floor are sent as grounding context;
+    // below-floor retrievals are not shown to the model as evidence.
+    const context = passing.map((h, i) => `[${i + 1}] ${cite(h)}\n${h.chunk.text}`).join("\n\n---\n\n");
     try {
       const result = await client.chat([
         { role: "system", content: "You answer questions about a codebase using only the provided chunks. Cite every claim as [n] referring to the chunk list, and include the file:line reference. If the chunks don't contain the answer, say so plainly - never invent code, files, or behavior that are not in the chunks." },
         { role: "user", content: `Question: ${question}\n\nCode chunks:\n\n${context}` },
       ], { maxTokens: maxAnswerTokens });
-      const { answer, stripped } = validateCitations(result.content, hits.length);
+      const { answer, stripped } = validateCitations(result.content, passing.length);
       const notes: string[] = [];
       if (stripped > 0) notes.push(`(stripped ${stripped} citation marker(s) pointing outside the retrieved chunks)`);
       if (modeNote) notes.push(modeNote.trim());
       if (!/\[\d+\]/.test(answer)) notes.push("(the model answer contains no citation markers - treat it as unverified and check the sources below)");
       const suffix = notes.length ? `\n${notes.join("\n")}` : "";
-      return { text: `${answer}${suffix}\n\nSources:\n${hits.map((h, i) => `[${i + 1}] ${cite(h)}`).join("\n")}`, hits, synthesized: true };
+      return { text: `${answer}${suffix}\n\nSources:\n${passing.map((h, i) => `[${i + 1}] ${cite(h)}`).join("\n")}`, hits, synthesized: true };
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
       return { text: extractiveAnswer(hits, question,
@@ -135,6 +142,10 @@ export async function answerQuestion(
     }
   }
 
+  if (client?.cfg.chatModel && lexicalMode) {
+    return { text: extractiveAnswer(hits, question,
+      "Retrieval only (lexical diagnostic mode: automatic synthesis is unsupported - no calibrated relevance floor exists for this scorer)." + modeNote, minScore), hits, synthesized: false };
+  }
   if (client?.cfg.chatModel && minScore > 0 && passing.length === 0) {
     // Synthesis skipped: no retrieved chunk cleared the score floor, so there
     // is no grounded context to send. Say so instead of buying a guess.
