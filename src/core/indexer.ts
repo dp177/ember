@@ -66,9 +66,14 @@ export async function indexRepo(
   const canReuse = oldVectors !== null && oldChunks.length > 0;
 
   log(`scanning ${root} ...`);
-  const scan = await scanRepoCapped(root);
+  // The scan cap keeps indexing memory bounded: scanRepo holds every
+  // scanned file's content at once, and each chunk costs ~10 KB of query
+  // memory (measured 60,190 chunks -> 623 MB peak RSS). EMBER_MAX_FILES
+  // raises it deliberately; the PARTIAL warning fires whenever it binds.
+  const maxFiles = parseInt(process.env.EMBER_MAX_FILES ?? "", 10) || undefined;
+  const scan = await scanRepoCapped(root, maxFiles);
   const files = scan.files;
-  if (scan.capped) log(`warning: file limit reached (${scan.cap}) - index is PARTIAL; larger repos are truncated at the scan cap`);
+  if (scan.capped) log(`warning: file limit reached (${scan.cap}) - index is PARTIAL; raise EMBER_MAX_FILES to index more (memory grows ~10 KB per chunk)`);
   const newHashes: FileHashMap = {};
   for (const f of files) newHashes[f.relPath] = { sha1: sha1(f.content), size: f.content.length };
 

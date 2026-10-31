@@ -60,3 +60,22 @@ test("incremental: full=true forces re-embedding everything", async () => {
   assert.equal(r2.embedded, r1.chunks);
   await fs.rm(dir, { recursive: true, force: true });
 });
+
+test("EMBER_MAX_FILES raises the scan cap deliberately", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-maxfiles-"));
+  try {
+    for (let i = 0; i < 5; i++) await fs.writeFile(path.join(dir, `mf${i}.ts`), `export function mf${i}(): number { return ${i}; }\n`);
+    process.env.EMBER_MAX_FILES = "3";
+    const r1 = await indexRepo(dir, new HashingEmbedder());
+    assert.equal(r1.capped, true);
+    assert.equal(r1.files, 3);
+    process.env.EMBER_MAX_FILES = "10";
+    const r2 = await indexRepo(dir, new HashingEmbedder(), undefined, { full: true });
+    assert.equal(r2.capped, false);
+    assert.equal(r2.files, 5);
+    delete process.env.EMBER_MAX_FILES;
+  } finally {
+    delete process.env.EMBER_MAX_FILES;
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

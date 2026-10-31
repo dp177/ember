@@ -23,7 +23,10 @@ scan -> chunk -> embed -> persist (.ember/)   [HNSW only with EMBER_HNSW=1]
    oversized files, lockfiles, and anything in `.emberignore`. Language from
    extension; 256 KB per-file cap; 4000-file total cap. Hitting the total
    cap used to silently truncate the index; now indexing warns, meta.capped
-   records it, and `ember status` prints a "partial" line.
+   records it, and `ember status` prints a "partial" line. The cap exists
+   because the scanner holds every scanned file's content in memory at once
+   and each chunk costs about 10 KB of query memory (60,190 chunks -> 623 MB
+   peak RSS measured); EMBER_MAX_FILES raises it deliberately.
 2. **Chunk** (`chunker.ts`): symbol-aware - functions/classes/methods become
    chunks with their line ranges and symbol names; files without recognizable
    symbols fall back to overlapping windows. Chunks carry

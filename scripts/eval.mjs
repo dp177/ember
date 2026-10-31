@@ -58,9 +58,12 @@ if (/^https?:\/\//.test(corpusRepo)) {
 const hybrid = process.env.EMBER_HYBRID === "1";
 // EMBER_EVAL_EMBEDDER=local measures the semantic path on the same frozen
 // corpus (needs: npm install @xenova/transformers; downloads the model).
+// EMBER_EVAL_LEX_DIM varies the lexical hashing dimension for measurement;
+// eval-only, it changes no product default.
+const lexDim = parseInt(process.env.EMBER_EVAL_LEX_DIM ?? "1024", 10);
 const embedder = process.env.EMBER_EVAL_EMBEDDER === "local"
   ? localEmbedderFromEnv({ ...process.env, EMBER_LOCAL_EMBED: "1" })
-  : new HashingEmbedder();
+  : new HashingEmbedder(lexDim);
 
 const corpus = await mkdtemp(path.join(os.tmpdir(), "ember-eval-"));
 try {
