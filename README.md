@@ -80,7 +80,10 @@ node dist/cli.js ui --path /path/to/repo --port 4173
 
 A single-page app over the real engine: search, ask, repo map, and notes.
 Hit cards show the actual code with line numbers; clicking a `file:line`
-citation expands the surrounding context. It binds `127.0.0.1` only, serves
+citation expands the surrounding context. The Reindex button runs indexing
+in the background with live progress (the run is async; a second click
+during a run is refused with 409, not piled up), and the status bar flags
+an interrupted run's resumable checkpoint. It binds `127.0.0.1` only, serves
 source read-only and jailed to the indexed root (traversal, absolute paths
 and symlink escapes are refused), and rejects cross-origin mutations. Deep
 links: `http://127.0.0.1:4173/#q=...&go=search|ask`.

@@ -54,7 +54,13 @@ async function storeStamp(root: string): Promise<string | null> {
   } catch { return null; }
 }
 
+/** One in-flight reindex per server: the run is async so the request
+ * returns immediately and the page polls /api/index-status. Progress
+ * lines are bounded (last 100). */
+interface IndexRun { startedAt: string; lines: string[]; done: boolean; error?: string; result?: unknown; }
+
 export function createUiServer(root: string, opts: UiOptions = {}): http.Server {
+  let indexRun: IndexRun | null = null;
   if (!opts.embedder) {
     const choice = embedderChoiceFromEnv(process.env, JsonlUsageLogger.forRepo(root));
     if (choice.warning) console.error(`note: ${choice.warning}`);
@@ -119,9 +125,42 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
       }
 
       if (route === "/api/index" && req.method === "POST") {
-        const r = await indexRepo(root, opts.embedder ?? embedderFromEnv(process.env, JsonlUsageLogger.forRepo(root)), undefined, { full: url.searchParams.get("full") === "1" });
-        cached = null; // next request loads the fresh index
-        json(res, 200, r);
+        if (indexRun && !indexRun.done) {
+          json(res, 409, { error: "an index run is already in progress - poll /api/index-status", running: true });
+          return;
+        }
+        const run: IndexRun = { startedAt: new Date().toISOString(), lines: [], done: false };
+        indexRun = run;
+        const full = url.searchParams.get("full") === "1";
+        void (async () => {
+          try {
+            const r = await indexRepo(
+              root,
+              opts.embedder ?? embedderFromEnv(process.env, JsonlUsageLogger.forRepo(root)),
+              m => { run.lines.push(m); if (run.lines.length > 100) run.lines.splice(0, run.lines.length - 100); },
+              { full },
+            );
+            cached = null; // next request loads the fresh index
+            run.result = r;
+          } catch (e) {
+            run.error = e instanceof Error ? e.message : String(e);
+          } finally {
+            run.done = true;
+          }
+        })();
+        json(res, 202, { started: true, full });
+        return;
+      }
+
+      if (route === "/api/index-status") {
+        if (!indexRun) { json(res, 200, { running: false }); return; }
+        json(res, 200, {
+          running: !indexRun.done,
+          startedAt: indexRun.startedAt,
+          lines: indexRun.lines.slice(-20),
+          result: indexRun.result,
+          error: indexRun.error,
+        });
         return;
       }
 

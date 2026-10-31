@@ -91,10 +91,15 @@ test("concurrency: 15 searches racing a re-index all get a consistent answer, no
         fetch(`${base}/api/search?q=${i % 2 ? "okThing" : "betaRace"}`).then(async r => ({ status: r.status, body: await r.json() as any })));
       const reindex = fetch(`${base}/api/index`, { method: "POST" }).then(r => r.status);
       const [results, reindexStatus] = await Promise.all([Promise.all(searches), reindex]);
-      assert.equal(reindexStatus, 200);
+      assert.equal(reindexStatus, 202, "index runs are async");
       for (const [i, r] of results.entries()) {
         assert.equal(r.status, 200, `search ${i} survived the swap (no torn read, no crash)`);
         assert.ok(Array.isArray(r.body.hits), `search ${i} returned a well-formed result`);
+      }
+      for (let i = 0; i < 100; i++) {
+        const st = await (await fetch(`${base}/api/index-status`)).json() as any;
+        if (!st.running) break;
+        await new Promise(r => setTimeout(r, 25));
       }
     } finally { await new Promise<void>(r => server.close(() => r())); }
   } finally { await fs.rm(dir, { recursive: true, force: true }); }

@@ -32,6 +32,7 @@ export const PAGE = `<!doctype html>
   .mode.extractive { background:#3a2f24; color:var(--dim); }
   .mode.synth { background:#274027; color:#9fd89f; }
   .status { font-size:12.5px; color:var(--dim); margin-bottom:14px; }
+  .progress { font:11.5px/1.5 ui-monospace,monospace; color:var(--dim); background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-bottom:14px; max-height:140px; overflow:auto; white-space:pre-wrap; }
   .err { color:#ff7a7a; }
   .hidden { display:none; }
   .srchead { color:var(--dim); font-size:12.5px; margin:18px 0 8px; }
@@ -42,6 +43,10 @@ export const PAGE = `<!doctype html>
   <h1><svg width="20" height="24" viewBox="0 0 20 24" fill="none" aria-hidden="true"><path d="M10 1c1 4-4 6-4 11a6 6 0 0 0 12 0c0-2-1-3.5-2-5-.5 1.5-1.5 2-2.5 2C14.5 6 12 3.5 10 1z" fill="#ff8c42"/><path d="M10 12c.6 2.4-2.4 3.4-2.4 6a3.4 3.4 0 0 0 6.8 0c0-1.2-.6-2.1-1.2-3-.3.9-.9 1.2-1.5 1.2.6-1.8-.6-3.3-1.7-4.2z" fill="#ffd166"/></svg>Ember</h1>
   <div class="sub">warm start for coding agents - local, cited, persistent</div>
   <div class="status" id="status">loading&hellip;</div>
+  <div class="bar" style="margin-bottom:14px">
+    <button id="reindexBtn" class="ghost">Reindex</button>
+  </div>
+  <div class="progress hidden" id="progress"></div>
 
   <div class="bar">
     <input id="q" type="text" placeholder="ask or search this repo&hellip;" autofocus>
@@ -72,9 +77,46 @@ async function status() {
     $("#status").innerHTML = s.indexed
       ? s.chunks + " chunks / " + s.files + " files &middot; " + esc(s.embedder) + " &middot; updated " + new Date(s.updatedAt).toLocaleString() + (s.hybrid ? " &middot; hybrid (experimental)" : "")
         + (s.modifiedSinceIndex > 0 ? ' &middot; <span class="err">' + s.modifiedSinceIndex + " file(s) modified since indexing - results may be stale; reindex to refresh</span>" : "")
-      : 'not indexed yet - run <code>ember index</code> or POST /api/index';
+      : 'not indexed yet - run <code>ember index</code> or press Reindex';
+    if (s.resumableCheckpoint) $("#status").innerHTML += ' &middot; <span class="err">interrupted run: ' + s.resumableCheckpoint.chunkCount + " chunks checkpointed - Reindex resumes it</span>";
   } catch (e) { $("#status").innerHTML = '<span class="err">' + esc(e.message) + "</span>"; }
 }
+
+let polling = false;
+$("#reindexBtn").addEventListener("click", async () => {
+  const btn = $("#reindexBtn"), prog = $("#progress");
+  btn.disabled = true;
+  prog.classList.remove("hidden");
+  prog.textContent = "starting index run...";
+  try {
+    const r = await fetch("/api/index", { method: "POST" });
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 409) prog.textContent = "an index run is already in progress - watching it...";
+    else if (!r.ok) throw new Error(d.error || r.statusText);
+  } catch (e) {
+    prog.textContent = "could not start indexing: " + e.message;
+    btn.disabled = false;
+    return;
+  }
+  if (polling) return;
+  polling = true;
+  const tick = async () => {
+    try {
+      const s = await api("/api/index-status");
+      if (s.lines && s.lines.length) prog.textContent = s.lines.join("\n");
+      if (!s.running) {
+        polling = false;
+        if (s.error) prog.textContent += "\nindexing failed: " + s.error;
+        else if (s.result) prog.textContent += "\ndone: indexed " + s.result.chunks + " chunks from " + s.result.files + " files";
+        btn.disabled = false;
+        status();
+        return;
+      }
+    } catch (e) { /* transient; keep polling */ }
+    setTimeout(tick, 1000);
+  };
+  tick();
+});
 
 function linesWithNumbers(text, startLine) {
   return text.split("\\n").map((l, j) => '<span class="ln">' + (startLine + j) + "</span>" + esc(l)).join("\\n");

@@ -186,9 +186,51 @@ test("ui: the engine is cached across requests and a re-index invalidates it", a
       // Re-index with new content: the next search must see it (no stale cache).
       await fs.writeFile(path.join(dir, "b.ts"), "export function betaCache(): number { return 2; }\n");
       const re = await fetch(`${base}/api/index`, { method: "POST" });
-      assert.equal(re.status, 200);
+      assert.equal(re.status, 202, "index runs are async now");
+      for (let i = 0; i < 50; i++) {
+        const st = await (await fetch(`${base}/api/index-status`)).json() as any;
+        if (!st.running) { assert.ok(st.result?.chunks > 0, "run completed with a result"); break; }
+        await new Promise(r => setTimeout(r, 50));
+        if (i === 49) assert.fail("index run did not finish");
+      }
       const third = await (await fetch(`${base}/api/search?q=betaCache`)).json() as any;
       assert.ok(third.hits.some((h: any) => h.file === "b.ts"), "post-reindex search sees the new file");
+    } finally { await new Promise<void>(r => server.close(() => r())); }
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test("ui: a second reindex during a running one is a 409, not a pile-up", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-ui-"));
+  try {
+    await fs.writeFile(path.join(dir, "a.ts"), "export function alphaSlow(): number { return 1; }\n");
+    // Slow scripted embedder: deterministic in-progress window.
+    let release: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    const slow: import("../src/core/embedder.js").Embedder = {
+      kind: "local-hashing-lexical", dim: 1024,
+      embed: async texts => { await gate; return new HashingEmbedder().embed(texts); },
+    };
+    const server = createUiServer(dir, { embedder: slow });
+    await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const first = await fetch(`${base}/api/index`, { method: "POST" });
+      assert.equal(first.status, 202);
+      for (let i = 0; i < 50; i++) {
+        const st = await (await fetch(`${base}/api/index-status`)).json() as any;
+        if (st.running) break;
+        await new Promise(r => setTimeout(r, 20));
+      }
+      const second = await fetch(`${base}/api/index`, { method: "POST" });
+      assert.equal(second.status, 409, "concurrent reindex refused");
+      const body = await second.json() as any;
+      assert.match(body.error, /already in progress/);
+      release!();
+      for (let i = 0; i < 100; i++) {
+        const st = await (await fetch(`${base}/api/index-status`)).json() as any;
+        if (!st.running) { assert.ok(!st.error, `run finished cleanly: ${st.error}`); break; }
+        await new Promise(r => setTimeout(r, 20));
+      }
     } finally { await new Promise<void>(r => server.close(() => r())); }
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
