@@ -80,7 +80,12 @@ export class LocalEmbedder implements Embedder {
   async embed(texts: string[]): Promise<Float32Array[]> {
     const extractor = await this.load();
     const out: Float32Array[] = [];
-    const BATCH = 16;
+    // Batch size is a memory knob: the WASM runtime's arena grows with
+    // batch x sequence and does not shrink between calls. Measured on a
+    // 2-core/2 GB box: batch 16 on real code chunks drove the indexer past
+    // 1.3 GB anon RSS and the kernel OOM-killed it (dmesg confirmed);
+    // EMBER_EMBED_BATCH lowers the peak at some throughput cost.
+    const BATCH = parseInt(process.env.EMBER_EMBED_BATCH ?? "", 10) || 16;
     for (let i = 0; i < texts.length; i += BATCH) {
       const batch = texts.slice(i, i + BATCH).map(t => t.slice(0, 2000)); // model context guard
       const res = await extractor(batch, { pooling: "mean", normalize: true });
