@@ -2,8 +2,11 @@
  * failures - hermetic via an injected pipeline stub (no model download). */
 
 import { test } from "node:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import assert from "node:assert/strict";
-import { LocalEmbedder, localEmbedderFromEnv, defaultModelCacheDir, DEFAULT_LOCAL_EMBED_MODEL, type FeatureExtractor } from "../src/core/local-embedder.js";
+import { LocalEmbedder, localEmbedderFromEnv, defaultModelCacheDir, probeModelCache, DEFAULT_LOCAL_EMBED_MODEL, type FeatureExtractor } from "../src/core/local-embedder.js";
 import { embedderFromEnv, HashingEmbedder } from "../src/core/embedder.js";
 
 function stub(dim: number, calls: string[][]): FeatureExtractor {
@@ -103,23 +106,48 @@ test("local embedder: a failed first download is an actionable error, and a read
   assert.ok(statuses.some(m => m.includes("model Xenova/test-model ready")), "completion confirmed");
 });
 
-test("local embedder: load status distinguishes a warm cache from the one-time download", async () => {
-  const stub = (dim: number): FeatureExtractor => (texts, opts) =>
+test("local embedder: load status reports cache state without promising offline use", async () => {
+  const fake = (dim: number): FeatureExtractor => (texts) =>
     Promise.resolve({ dims: [texts.length, dim], data: new Float32Array(texts.length * dim) });
 
-  const warm: string[] = [];
-  await new LocalEmbedder("Xenova/test-model", 8, () => Promise.resolve(stub(8)),
-    m => warm.push(m), () => true).embed(["x"]);
-  assert.ok(warm.some(m => m.includes("loading cached local semantic model") && m.includes("runs offline")),
-    "warm cache says so: " + warm.join(" | "));
-  assert.ok(!warm.some(m => m.includes("downloads it once")), "warm cache must not claim a download");
+  const complete: string[] = [];
+  await new LocalEmbedder("Xenova/test-model", 8, () => Promise.resolve(fake(8)),
+    m => complete.push(m), () => "complete").embed(["x"]);
+  assert.ok(complete.some(m => m.includes("cached files found")),
+    "complete cache says what was found: " + complete.join(" | "));
+  assert.ok(!complete.some(m => m.includes("runs offline") || m.includes("downloads it once")),
+    "presence alone must not promise offline use or claim a download");
+
+  const partial: string[] = [];
+  await new LocalEmbedder("Xenova/test-model", 8, () => Promise.resolve(fake(8)),
+    m => partial.push(m), () => "partial").embed(["x"]);
+  assert.ok(partial.some(m => m.includes("partial cache found")),
+    "partial cache is named: " + partial.join(" | "));
 
   const cold: string[] = [];
-  await new LocalEmbedder("Xenova/test-model", 8, () => Promise.resolve(stub(8)),
-    m => cold.push(m), () => false).embed(["x"]);
-  assert.ok(cold.some(m => m.includes("loading local semantic model") && m.includes("first use downloads it once")),
-    "cold cache announces the one-time download: " + cold.join(" | "));
-  assert.ok(!cold.some(m => m.includes("loading cached")), "cold cache must not claim a cache hit");
+  await new LocalEmbedder("Xenova/test-model", 8, () => Promise.resolve(fake(8)),
+    m => cold.push(m), () => "absent").embed(["x"]);
+  assert.ok(cold.some(m => m.includes("first use downloads it once")),
+    "absent cache announces the one-time download: " + cold.join(" | "));
+});
+
+test("probeModelCache: absent, partial, complete - and truncated files still count as present", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-cache-probe-"));
+  try {
+    const model = path.join(dir, "model");
+    assert.strictEqual(probeModelCache(model), "absent", "missing directory");
+    await fs.mkdir(model, { recursive: true });
+    await fs.writeFile(path.join(model, "config.json"), "{}");
+    assert.strictEqual(probeModelCache(model), "partial", "config alone is partial");
+    await fs.writeFile(path.join(model, "tokenizer.json"), "{}");
+    assert.strictEqual(probeModelCache(model), "partial", "weights still missing");
+    await fs.mkdir(path.join(model, "onnx"));
+    await fs.writeFile(path.join(model, "onnx", "model_quantized.onnx"), "");
+    assert.strictEqual(probeModelCache(model), "complete",
+      "all expected files present - note the zero-byte 'weights' pass: the probe reports presence, not validity");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("defaultModelCacheDir: resolves the transformers.js cache path, null when unresolvable", () => {

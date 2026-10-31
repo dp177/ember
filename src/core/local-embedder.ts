@@ -19,6 +19,23 @@ export const DEFAULT_LOCAL_EMBED_MODEL = "Xenova/all-MiniLM-L6-v2";
 
 const resolvePkg = (id: string): string => createRequire(import.meta.url).resolve(id);
 
+/** What the cache probe may report. "complete" means the expected files
+ * are present - NOT that the weights are valid or that offline use is
+ * guaranteed; a truncated file is still present. */
+export type CacheState = "absent" | "partial" | "complete";
+
+/** Files a transformers.js feature-extraction model needs from the hub.
+ * The onnx/ directory holds the actual weights (name varies with
+ * quantization), so any *.onnx under it counts. */
+export function probeModelCache(dir: string): CacheState {
+  if (!fs.existsSync(dir)) return "absent";
+  const has = (rel: string) => fs.existsSync(path.join(dir, rel));
+  const onnxDir = path.join(dir, "onnx");
+  const hasOnnx = fs.existsSync(onnxDir) &&
+    fs.readdirSync(onnxDir).some(f => f.endsWith(".onnx"));
+  return has("config.json") && has("tokenizer.json") && hasOnnx ? "complete" : "partial";
+}
+
 /** Where transformers.js caches a downloaded model (its env.js sets the
  * default cache to <package root>/.cache/<org>/<name>). Resolved through
  * the package's own package.json so the lazy import stays lazy - this
@@ -61,7 +78,7 @@ export class LocalEmbedder implements Embedder {
     dim = 384,
     private factory?: PipelineFactory,
     private onStatus?: (msg: string) => void,
-    private cacheProbe?: (model: string) => boolean,
+    private cacheProbe?: (model: string) => CacheState,
   ) {
     // Kind carries the model (same rule as HttpEmbedder): switching local
     // models forces an honest full rebuild via the indexer comparison.
@@ -89,12 +106,17 @@ export class LocalEmbedder implements Embedder {
     }
     // First-use setup must be visible: the model download can take a while.
     // Node CLIs/servers see this on stderr; injected onStatus can redirect it.
-    // The line distinguishes a warm cache from the one-time download - the
-    // old single message implied a download on every run.
+    // The line distinguishes three cache states - the old single message
+    // implied a download on every run. It reports what was FOUND on disk,
+    // never a guarantee: presence of files does not prove valid weights,
+    // and a truncated file counts as present (the load error path covers it).
     const status = this.onStatus ?? ((m: string) => console.error(m));
-    status(this.isModelCached()
-      ? `loading cached local semantic model ${this.model} (runs offline)`
-      : `loading local semantic model ${this.model} - first use downloads it once, then it runs offline`);
+    const cache = this.modelCacheState();
+    status(cache === "complete"
+      ? `loading local semantic model ${this.model} (cached files found)`
+      : cache === "partial"
+        ? `loading local semantic model ${this.model} - partial cache found, the rest downloads now; a finished download runs offline`
+        : `loading local semantic model ${this.model} - first use downloads it once, then it runs offline`);
     try {
       this.extractor = await factory("feature-extraction", this.model, { quantized: true });
     } catch (e) {
@@ -109,10 +131,11 @@ export class LocalEmbedder implements Embedder {
     return this.extractor;
   }
 
-  private isModelCached(): boolean {
+  private modelCacheState(): CacheState {
     if (this.cacheProbe) return this.cacheProbe(this.model);
     const dir = defaultModelCacheDir(this.model);
-    return dir !== null && fs.existsSync(dir);
+    if (dir === null) return "absent";
+    return probeModelCache(dir);
   }
 
   async embed(texts: string[]): Promise<Float32Array[]> {
