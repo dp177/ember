@@ -67,3 +67,11 @@ test("recentRepoUrl round-trips through the /tree/<branch> form", () => {
   assert.equal(recentRepoUrl(entry("sindresorhus/parse-json", "main")),
     "https://github.com/sindresorhus/parse-json/tree/main");
 });
+
+test("display-flavored labels containing @ (older builds) are dropped", () => {
+  const s = fakeStore(JSON.stringify([
+    { label: "a/one@main", branch: "main", chunkCount: 1, fileCount: 1, loadedAt: "2026-11-01T00:00:00.000Z" },
+    { label: "a/one", branch: "main", chunkCount: 1, fileCount: 1, loadedAt: "2026-11-01T00:00:00.000Z" },
+  ]));
+  assert.deepEqual(loadRecents(s).map(r => r.label), ["a/one"]);
+});

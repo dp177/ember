@@ -34,7 +34,9 @@ export function loadRecents(store: RecentStore): RecentRepo[] {
     return parsed.filter(
       (r): r is RecentRepo =>
         !!r && typeof r === "object" &&
-        typeof r.label === "string" && r.label.includes("/") &&
+        // "@" never appears in owner/repo names - its presence means an
+        // old display-flavored "owner/repo@ref" label; drop those entries.
+        typeof r.label === "string" && r.label.includes("/") && !r.label.includes("@") &&
         typeof r.branch === "string" && r.branch.length > 0 &&
         typeof r.chunkCount === "number" && typeof r.fileCount === "number" &&
         typeof r.loadedAt === "string",
