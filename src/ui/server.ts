@@ -143,13 +143,13 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
   // semantic default, a per-request load would reload the WASM model and
   // re-read every vector on each search. The stamp check keeps an external
   // re-index (CLI, another agent) honest; a failed load is never cached.
-  let cached: { stamp: string; engine: Promise<EmberEngine> } | null = null;
+  let cached: { root: string; stamp: string; engine: Promise<EmberEngine> } | null = null;
   const engineFor = async (): Promise<EmberEngine> => {
     const stamp = await storeStamp(activeRoot);
-    if (cached && stamp !== null && cached.stamp === stamp) return cached.engine;
+    if (cached && cached.root === activeRoot && stamp !== null && cached.stamp === stamp) return cached.engine;
     const p = loadEngine(activeRoot, opts);
     p.catch(() => { if (cached?.engine === p) cached = null; });
-    cached = { stamp: stamp ?? "missing", engine: p };
+    cached = { root: activeRoot, stamp: stamp ?? "missing", engine: p };
     return p;
   };
 
@@ -222,15 +222,21 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
           const log = (m: string) => { run.lines.push(m); if (run.lines.length > 100) run.lines.splice(0, run.lines.length - 100); };
           try {
             const loaded = await loader(repoUrl, log);
+            log(`indexing ${loaded.label}...`);
+            const runner = opts.indexRunner ?? childIndexRunner(loaded.dir, opts);
+            const result = await runner(log, false);
+            if (result.files === 0)
+              log("note: no recognizable source files in this repo (.ts .js .py .go .rs .java .rb .md and friends) - search will find nothing here");
+            // Switch only after the new index exists: any failure above
+            // leaves the previous root searchable. These three statements
+            // are synchronous, so a request cannot observe a mixed state.
             activeRoot = loaded.dir;
             activeSource = { kind: "github", label: loaded.label };
             cached = null;
-            log(`indexing ${loaded.label}...`);
-            const runner = opts.indexRunner ?? childIndexRunner(activeRoot, opts);
-            run.result = await runner(log, false);
-            cached = null; // next request loads the fresh index
+            run.result = result;
           } catch (e) {
             run.error = e instanceof Error ? e.message : String(e);
+            log(`load failed - the previous repo is still active and searchable`);
           } finally {
             run.done = true;
           }

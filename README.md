@@ -102,15 +102,24 @@ and symlink escapes are refused), and rejects cross-origin mutations. Deep
 links: `http://127.0.0.1:4173/#q=...&go=search|ask`.
 
 The Load repo field loads a **public GitHub repo**: paste
-`github.com/owner/repo` and Ember shallow-clones it into
-`~/.ember/remotes/`, switches the active root, and indexes it with the same
-local embedder and live progress - then search/ask run against the loaded
-repo (the status bar shows `github: owner/repo` vs `local: <dir>`). Loading
-again fetches the latest default branch. The URL parser is the security
-boundary and it is deliberately narrow: github.com only, no SSH/file URLs,
-no credentials in URLs, no deep links - private repos simply fail the clone
-(`GIT_TERMINAL_PROMPT=0`, never a prompt, never a credential) and the error
-surfaces in the progress log.
+`github.com/owner/repo` (or a `/tree/<branch>` link - the named branch is
+cloned, never silently swapped for the default) and Ember shallow-clones
+it into `~/.ember/remotes/`, indexes it with the same local embedder and
+live progress, then switches the active root - search/ask now run against
+the loaded repo (the status bar shows `github: owner/repo` vs
+`local: <dir>`). Loading again fetches the latest of that branch. The URL
+parser is the security boundary and it is deliberately narrow: github.com
+over https only, no SSH/file URLs, no credentials in URLs, no deep links
+beyond `/tree/<branch>`. The clone itself is hardened: user and system
+gitconfig are ignored (no credential helpers, askpass programs,
+`http.extraHeader`, `url.insteadOf` host rewriting, or filter drivers can
+affect it), prompting is disabled, the credential helper is explicitly
+emptied, and every git call is time-bounded - so a private or missing repo
+fails fast and the error surfaces in the progress log. Nothing from the
+cloned repo is executed: no submodules are fetched and git never runs repo
+hooks on clone. A failed load (clone or index) leaves the previous repo
+active and searchable, and a repo with no recognizable source files says
+so plainly instead of pretending to be searchable.
 
 ## Use it from your coding agent (MCP)
 

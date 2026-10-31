@@ -141,6 +141,9 @@ $("#repoBtn").addEventListener("click", async () => {
   btn.disabled = true;
   prog.classList.remove("hidden");
   prog.textContent = "loading " + url + "...";
+  // The root is about to switch: hits from the previous repo must never
+  // sit under the new repo's name. Clear them up front.
+  document.getElementById("tab-results").innerHTML = "";
   try {
     const r = await fetch("/api/load-repo", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url }) });
     const d = await r.json().catch(() => ({}));

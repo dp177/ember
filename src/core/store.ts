@@ -243,8 +243,11 @@ export class EmberStore {
       if (genBefore !== null && meta.generation !== undefined && meta.generation !== genBefore) {
         throw new Error(`torn read: meta generation ${meta.generation} but generation file ${genBefore}`);
       }
-      const lines = (await fs.readFile(path.join(this.dir, "chunks.jsonl"), "utf8")).trim().split("\n");
-      const chunks = lines.map(l => JSON.parse(l)) as ChunkRecord[];
+      // A valid 0-chunk index (e.g. a repo with no recognizable source
+      // files) is an EMPTY chunks.jsonl: trim+split on "" would yield one
+      // empty line and JSON.parse would fail as "corrupt".
+      const raw = (await fs.readFile(path.join(this.dir, "chunks.jsonl"), "utf8")).trim();
+      const chunks = (raw ? raw.split("\n") : []).map(l => JSON.parse(l)) as ChunkRecord[];
       const buf = await fs.readFile(path.join(this.dir, "vectors.f32"));
       if (meta.chunkCount !== chunks.length || buf.byteLength !== chunks.length * meta.dim * 4) {
         throw new Error(`inconsistent file set (meta ${meta.chunkCount} chunks, chunks.jsonl ${chunks.length}, vectors ${buf.byteLength} bytes)`);
