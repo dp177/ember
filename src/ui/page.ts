@@ -50,8 +50,8 @@ export const PAGE = `<!doctype html>
 
   <div class="bar">
     <input id="q" type="text" placeholder="ask or search this repo&hellip;" autofocus>
-    <button id="askBtn">Ask</button>
-    <button id="searchBtn" class="ghost">Search</button>
+    <button id="searchBtn">Search</button>
+    <button id="askBtn" class="ghost" title="Needs a configured chat model for synthesis; without one this is labeled retrieval-only">Ask</button>
   </div>
   <div class="tabs">
     <button data-tab="results" class="on">Results</button>
