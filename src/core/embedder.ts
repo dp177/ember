@@ -16,6 +16,11 @@ import { LlmClient, llmConfigFromEnv, sharedClientFromEnv, type UsageLogger } fr
 import { LocalEmbedder, localEmbedderFromEnv } from "./local-embedder.js";
 
 export interface Embedder {
+  /** Identity of the embedding space, not just a family label: an embedder
+   * backed by a model MUST include the exact model id (HttpEmbedder and
+   * LocalEmbedder both embed `:${model}`). Index reuse and resume
+   * checkpoints compare kind+dim to decide whether old vectors are valid;
+   * two models sharing a kind would silently mix embedding spaces. */
   readonly kind: string;
   readonly dim: number;
   embed(texts: string[]): Promise<Float32Array[]>;

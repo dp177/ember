@@ -208,12 +208,18 @@ Indexing now checkpoints progress and a rerun resumes it:
 - A checkpoint is written every 200 files or 2,000 chunks
   (`EMBER_CHECKPOINT_FILES` / `EMBER_CHECKPOINT_CHUNKS` override), staged
   in a tmp directory and renamed into place.
-- On the next run a checkpoint whose embedder kind and dimension match
-  becomes the reuse baseline. A model change or a torn checkpoint is
-  discarded and the run falls back to the live index, or to a full
-  re-embed when none is usable. Per-file sha1s are re-validated against
-  the current source on resume, so files edited between the crash and
-  the rerun are re-embedded.
+- On the next run a checkpoint becomes the reuse baseline only when its
+  embedder kind and dimension match the current embedder. kind carries
+  the exact model id (`local-wasm:<model>`, `http-openai-compatible:<model>`;
+  enforced by the Embedder interface contract and a regression test), so
+  two same-dimension models are correctly treated as different embedding
+  spaces. A model change or a torn checkpoint is discarded and the run
+  falls back to the live index, or to a full re-embed when none is
+  usable. Per-file sha1s are re-validated against the current source on
+  resume, so files edited between the crash and the rerun are
+  re-embedded. One residual limit, shared with ordinary incremental
+  reuse: an upstream weight change published under the SAME model id is
+  not detectable by name comparison.
 - A completed run (or `ember index --full`) clears the checkpoint.
 
 ## Testing strategy

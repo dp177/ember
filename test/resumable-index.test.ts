@@ -8,6 +8,7 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { HashingEmbedder, type Embedder } from "../src/core/embedder.js";
+import { LocalEmbedder, type PipelineFactory } from "../src/core/local-embedder.js";
 import { indexRepo } from "../src/core/indexer.js";
 import { EmberEngine } from "../src/core/engine.js";
 
@@ -77,4 +78,42 @@ test("a model change invalidates the checkpoint (no cross-model reuse)", async (
     const engine = await EmberEngine.load(dir, other);
     assert.ok((await engine.search("gn2", 1))[0].chunk.file === "f2.ts");
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test("different models with the SAME dim share no vectors (kind carries model identity)", async () => {
+  // A 384-dim model A and a 384-dim model B are different embedding spaces;
+  // resuming A's checkpoint with B would silently mix spaces. The Embedder
+  // contract puts the exact model id in kind, so the checkpoint's kind+dim
+  // comparison must reject this.
+  const factory: PipelineFactory = async (_task, _model) => async (texts, { normalize }) => {
+    const dim = 384;
+    const data = new Float32Array(texts.length * dim);
+    for (let i = 0; i < texts.length; i++) for (let j = 0; j < dim; j++) data[i * dim + j] = ((texts[i].charCodeAt(j % texts[i].length) + j) % 97) / 97 - 0.5;
+    if (normalize) for (let i = 0; i < texts.length; i++) {
+      let n = 0; for (let j = 0; j < dim; j++) n += data[i * dim + j] ** 2;
+      n = Math.sqrt(n) || 1; for (let j = 0; j < dim; j++) data[i * dim + j] /= n;
+    }
+    return { dims: [texts.length, dim], data };
+  };
+  const modelA = () => new LocalEmbedder("example/model-a", 384, factory);
+  const modelB = () => new LocalEmbedder("example/model-b", 384, factory);
+  const dir = await mkrepo(4);
+  try {
+    await indexRepo(dir, modelA());
+    for (let i = 0; i < 4; i++) await fs.writeFile(path.join(dir, `f${i}.ts`), `export function hn${i}(): number { return ${i}; }\n`);
+    process.env.EMBER_CHECKPOINT_FILES = "1";
+    // Crash mid-reindex under model A so the checkpoint carries A's identity.
+    let calls = 0;
+    const flakyA: Embedder = {
+      kind: modelA().kind, dim: 384,
+      embed: async texts => { if (calls++ >= 1) throw new Error("simulated interruption"); return modelA().embed(texts); },
+    };
+    await assert.rejects(() => indexRepo(dir, flakyA), /simulated interruption/);
+    assert.ok(await fs.stat(`${dir}/.ember.checkpoint/checkpoint.json`).then(() => true, () => false), "model A checkpoint exists");
+    const r = await indexRepo(dir, modelB());
+    assert.equal(r.kept, 0, "no reuse across same-dim models");
+    assert.equal(r.chunks, 4);
+    const meta = JSON.parse(await fs.readFile(`${dir}/.ember/meta.json`, "utf8"));
+    assert.equal(meta.embedderKind, "local-wasm:example/model-b");
+  } finally { delete process.env.EMBER_CHECKPOINT_FILES; await fs.rm(dir, { recursive: true, force: true }); }
 });
