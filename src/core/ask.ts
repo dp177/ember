@@ -36,23 +36,30 @@ function cite(h: SearchHit): string {
  * applies this floor; it only gates what Ask presents as evidence. */
 export const ASK_MIN_SEMANTIC_SCORE = 0.2;
 
-export function askMinScore(embedderKind: string, hybrid: boolean, env: NodeJS.ProcessEnv = process.env): number {
+/** The score Ask may gate on: in hybrid mode `score` is an RRF rank fusion
+ * (~0.016-0.024 regardless of relevance), so the calibrated cosine carried as
+ * `vectorScore` is the evidence score. Hits with no vectorScore (ranked only
+ * lexically) have no calibrated evidence and cannot clear the floor. */
+export function evidenceScore(h: SearchHit): number {
+  return h.vectorScore ?? h.score;
+}
+
+export function askMinScore(embedderKind: string, _hybrid: boolean, env: NodeJS.ProcessEnv = process.env): number {
   const raw = parseFloat(env.EMBER_ASK_MIN_SCORE ?? "");
   if (Number.isFinite(raw)) return raw;
-  // Hybrid fuses vector + BM25 ranks via RRF: measured scores are ~0.016-0.024
-  // regardless of relevance, so the cosine-scale floor would abstain on
-  // everything, and no separating threshold exists there either (relevant and
-  // off-topic probes overlap at the RRF floor). Lexical hashing scores show
-  // near-total relevant/off-topic overlap (0.17-0.45 vs 0.14-0.39). Both modes
-  // keep the legacy score>0 behavior and Ask says the floor is uncalibrated.
-  if (hybrid) return 0;
+  // Hybrid: the floor applies to the underlying cosine (vectorScore), which
+  // measured the same separation as the default path (relevant 0.224-0.596 vs
+  // off-topic 0.083-0.258 on the frozen corpus, in-sample). Lexical hashing
+  // scores show near-total relevant/off-topic overlap (0.17-0.45 vs
+  // 0.14-0.39): no threshold can separate them, so the lexical diagnostic
+  // path keeps the legacy score>0 behavior and discloses it.
   return embedderKind.startsWith("local-wasm:") ? ASK_MIN_SEMANTIC_SCORE : 0;
 }
 
 /** Disclosure appended to Ask output when the relevance floor is not calibrated for the active mode. */
 export function askModeNote(embedderKind: string, hybrid: boolean): string {
   if (hybrid && embedderKind.startsWith("local-wasm:"))
-    return " (hybrid mode: relevance floor uncalibrated - scores are RRF-fused on a different scale)";
+    return " (hybrid mode: evidence gated on the underlying semantic score - RRF rank scores are not relevance)";
   if (!embedderKind.startsWith("local-wasm:"))
     return " (lexical diagnostic mode: no relevance floor calibrated for this scorer - off-topic and relevant scores overlap)";
   return "";
@@ -74,11 +81,11 @@ export function validateCitations(answer: string, chunkCount: number): { answer:
 function extractiveAnswer(hits: SearchHit[], question: string, header: string, minScore = 0): string {
   // A chunk below the score floor is not a "source" - presenting it as one
   // invents relevance. Say so instead of padding the list.
-  const sources = hits.filter(h => h.score > minScore);
+  const sources = hits.filter(h => evidenceScore(h) > minScore);
   const lines = [header, ""];
   if (sources.length === 0) {
     const top = hits[0];
-    lines.push(`No chunks scored high enough to treat as relevant for: "${question}"${top ? ` (top score ${top.score.toFixed(3)}, at or below the ${minScore} floor)` : ""}. The closest match${top ? ` (${cite(top)})` : ""} is likely unrelated. Try rephrasing, or check the repo is indexed (ember status).`);
+    lines.push(`No chunks scored high enough to treat as relevant for: "${question}"${top ? ` (top score ${evidenceScore(top).toFixed(3)}, at or below the ${minScore} floor)` : ""}. The closest match${top ? ` (${cite(top)})` : ""} is likely unrelated. Try rephrasing, or check the repo is indexed (ember status).`);
     return lines.join("\n");
   }
   lines.push(`Retrieved sources for: "${question}" (ranked by score; retrieval is not an answer)`, "");
@@ -102,7 +109,7 @@ export async function answerQuestion(
   }
   const minScore = askMinScore(engine.embedderKind, engine.hybrid);
   const modeNote = askModeNote(engine.embedderKind, engine.hybrid);
-  const passing = hits.filter(h => h.score > minScore);
+  const passing = hits.filter(h => evidenceScore(h) > minScore);
 
   const envCap = typeof process !== "undefined" ? parseInt(process.env.EMBER_MAX_OUTPUT_TOKENS ?? "", 10) : NaN;
   const maxAnswerTokens = opts.maxAnswerTokens ?? (Number.isFinite(envCap) ? envCap : 1024);

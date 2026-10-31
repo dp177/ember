@@ -39,6 +39,10 @@ function pathBoost(queryTokens: Set<string>, file: string, perToken: number, cap
 export interface SearchHit {
   chunk: ChunkRecord;
   score: number;
+  /** Raw vector cosine for this hit, independent of ranking mode.
+   * Populated in hybrid mode (where `score` is an RRF-fused rank score on a
+   * different scale) so evidence gating can use the calibrated cosine. */
+  vectorScore?: number;
 }
 
 export interface EngineOptions {
@@ -146,11 +150,13 @@ export class EmberEngine {
       .filter((id): id is number => id !== undefined);
 
     const fused = rrfFuse([vecRanking, lexRanking], [1.0, HYBRID_LEXICAL_WEIGHT]);
+    const vecById = new Map(vecScored.map(x => [x.id, x.s]));
     const hits: SearchHit[] = [];
     for (const [id, score] of fused) {
       const chunk = byId.get(id);
       if (!chunk) continue;
-      hits.push({ chunk, score: score + pathBoost(qTokens, chunk.file, HYBRID_PATH_BOOST_PER_TOKEN, HYBRID_PATH_BOOST_CAP) });
+      const vs = vecById.get(id);
+      hits.push({ chunk, score: score + pathBoost(qTokens, chunk.file, HYBRID_PATH_BOOST_PER_TOKEN, HYBRID_PATH_BOOST_CAP), ...(vs !== undefined ? { vectorScore: vs } : {}) });
     }
     hits.sort((a, b) => b.score - a.score);
     return hits.slice(0, k);

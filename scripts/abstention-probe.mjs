@@ -51,7 +51,7 @@ const engine = await EmberEngine.load(corpus, embedder, { hybrid: mode === "hybr
 
 async function probe(q) {
   const hits = await engine.search(q, 5);
-  return { top: hits[0]?.score ?? null, scores: hits.map(h => h.score), topFile: hits[0]?.chunk.file ?? null };
+  return { top: hits[0]?.score ?? null, scores: hits.map(h => h.score), vecTop: hits[0]?.vectorScore ?? null, topFile: hits[0]?.chunk.file ?? null };
 }
 
 const relevant = [];

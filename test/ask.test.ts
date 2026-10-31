@@ -95,7 +95,7 @@ test("ask: zero-score chunks are never presented as sources", async () => {
 test("askMinScore: semantic floor 0.2 by default, 0 for lexical, env overrides", async () => {
   const { askMinScore, ASK_MIN_SEMANTIC_SCORE } = await import("../src/core/ask.js");
   assert.equal(askMinScore("local-wasm:Xenova/all-MiniLM-L6-v2", false, {}), ASK_MIN_SEMANTIC_SCORE);
-  assert.equal(askMinScore("local-wasm:Xenova/all-MiniLM-L6-v2", true, {}), 0, "hybrid RRF scale: floor must not apply");
+  assert.equal(askMinScore("local-wasm:Xenova/all-MiniLM-L6-v2", true, {}), ASK_MIN_SEMANTIC_SCORE, "hybrid floors on the underlying cosine, not the RRF score");
   assert.equal(askMinScore("hashing-v1", false, {}), 0);
   assert.equal(askMinScore("local-wasm:anything", false, { EMBER_ASK_MIN_SCORE: "0.42" }), 0.42);
 });
@@ -135,18 +135,35 @@ test("abstention: synthesis is skipped when nothing clears the floor (no request
   await new Promise<void>(r => { srv.closeAllConnections?.(); srv.close(() => r()); });
 });
 
-test("uncalibrated modes disclose instead of guessing a floor", async () => {
-  const { askModeNote } = await import("../src/core/ask.js");
-  assert.match(askModeNote("local-wasm:m", true), /hybrid mode: relevance floor uncalibrated/);
+test("mode-aware evidence gating and disclosures", async () => {
+  const { askModeNote, evidenceScore } = await import("../src/core/ask.js");
+  assert.match(askModeNote("local-wasm:m", true), /underlying semantic score/);
   assert.match(askModeNote("local-hashing-lexical", false), /lexical diagnostic mode/);
   assert.equal(askModeNote("local-wasm:m", false), "");
+  assert.equal(evidenceScore({ score: 0.018, vectorScore: 0.31 } as never), 0.31);
+  assert.equal(evidenceScore({ score: 0.018 } as never), 0.018);
 
-  // hybrid stub: even tiny scores must not be floored (RRF scale), and the note shows
-  const hybridEngine = {
+  // hybrid: RRF score below 0.2 but underlying cosine strong -> sources shown
+  const grounded = {
     embedderKind: "local-wasm:m", hybrid: true,
-    async search() { return [{ score: 0.018, chunk: { file: "a.ts", startLine: 1, endLine: 2, text: "x" } }]; },
+    async search() { return [{ score: 0.018, vectorScore: 0.31, chunk: { file: "a.ts", startLine: 1, endLine: 2, text: "x" } }]; },
   } as unknown as EmberEngine;
-  const r = await answerQuestion(hybridEngine, "anything", 5);
-  assert.match(r.text, /Retrieved sources for/, "hybrid low scores still presented - no guessed floor");
-  assert.match(r.text, /hybrid mode: relevance floor uncalibrated/);
+  const ok = await answerQuestion(grounded, "anything", 5);
+  assert.match(ok.text, /Retrieved sources for/, "hybrid gates on vectorScore, not RRF score");
+
+  // hybrid: underlying cosine weak -> abstains, synthesis skipped
+  const weak = {
+    embedderKind: "local-wasm:m", hybrid: true,
+    async search() { return [{ score: 0.017, vectorScore: 0.11, chunk: { file: "a.ts", startLine: 1, endLine: 2, text: "x" } }]; },
+  } as unknown as EmberEngine;
+  const no = await answerQuestion(weak, "how to knit a scarf", 5);
+  assert.match(no.text, /No chunks scored high enough/, "weak underlying cosine abstains in hybrid");
+
+  // hybrid hit with no vectorScore (lexically ranked only) cannot clear the floor
+  const lexOnly = {
+    embedderKind: "local-wasm:m", hybrid: true,
+    async search() { return [{ score: 0.019, chunk: { file: "a.ts", startLine: 1, endLine: 2, text: "x" } }]; },
+  } as unknown as EmberEngine;
+  const r2 = await answerQuestion(lexOnly, "anything", 5);
+  assert.match(r2.text, /No chunks scored high enough/, "hits without a calibrated score are not Ask evidence");
 });
