@@ -22,23 +22,9 @@ const SKIP_DIRS = new Set([
   ".ember.checkpoint",
 ]);
 
-const SKIP_FILES = new Set([
-  "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "composer.lock",
-  "Gemfile.lock", "poetry.lock", "Cargo.lock", "go.sum",
-]);
+import { LANG_BY_EXT, MAX_FILE_BYTES, SKIP_FILES } from "./langs.js";
 
-const LANG_BY_EXT: Record<string, string> = {
-  ".ts": "typescript", ".tsx": "typescript", ".js": "javascript", ".jsx": "javascript",
-  ".mjs": "javascript", ".cjs": "javascript", ".py": "python", ".go": "go",
-  ".rs": "rust", ".java": "java", ".kt": "kotlin", ".cpp": "cpp", ".cc": "cpp",
-  ".cxx": "cpp", ".c": "c", ".h": "c-header", ".hpp": "cpp-header", ".cs": "csharp",
-  ".rb": "ruby", ".php": "php", ".swift": "swift", ".scala": "scala",
-  ".md": "markdown", ".mdx": "markdown", ".sql": "sql", ".sh": "shell",
-  ".yml": "yaml", ".yaml": "yaml", ".json": "json", ".toml": "toml",
-};
-
-const MAX_FILE_BYTES = 256 * 1024;
-export const MAX_TOTAL_FILES = 4000;
+const MAX_TOTAL_FILES = 4000
 
 /** Optional <root>/.emberignore: one repo-relative path per line. A line
  * matches that exact file, or everything under that directory prefix.

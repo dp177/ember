@@ -148,7 +148,8 @@ export class LocalEmbedder implements Embedder {
     // batch 4 ran the same corpus at a stable ~476 MB total RSS.
     // EMBER_EMBED_BATCH overrides; otherwise pick from CURRENT free memory
     // so a memory-tight machine gets the safe size without knowing the knob.
-    const BATCH = parseInt(process.env.EMBER_EMBED_BATCH ?? "", 10) || autoEmbedBatch(os.freemem());
+    const envBatch = typeof process !== "undefined" ? (process.env.EMBER_EMBED_BATCH ?? "") : ""; // browser demo build: no process
+    const BATCH = parseInt(envBatch, 10) || autoEmbedBatch(os.freemem());
     if (BATCH < 16 && !this.batchNoteShown) {
       this.batchNoteShown = true;
       console.error(`local embedder: batch size ${BATCH} (auto from free memory; override with EMBER_EMBED_BATCH)`);

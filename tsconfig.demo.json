@@ -11,13 +11,19 @@
       "ES2022",
       "DOM"
     ],
-    "types": []
+    "types": [
+      "node"
+    ]
   },
   "include": [
     "demo-web/main.ts",
     "demo-web/search-core.ts",
+    "demo-web/repo-loader.ts",
     "demo-web/env.d.ts",
     "src/core/hnsw.ts",
-    "src/core/embedder.ts"
+    "src/core/hashing-embedder.ts",
+    "src/core/chunker.ts",
+    "src/core/langs.ts",
+    "src/ui/github-url.ts"
   ]
 }

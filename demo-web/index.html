@@ -11,26 +11,38 @@
   h1 { font-size: 1.4em; margin-bottom: 0.2em; }
   .sub { color: #57534e; font-size: 0.9em; margin-bottom: 1.2em; }
   #stats { background: #fffbeb; border: 1px solid #fde68a; padding: 0.8em; font-size: 0.85em; border-radius: 6px; }
-  form { margin: 1.2em 0 0.4em; display: flex; gap: 0.5em; }
+  form, .repo-bar { margin: 1.2em 0 0.4em; display: flex; gap: 0.5em; }
+  .repo-bar { margin-top: 0.6em; }
   input { flex: 1; font: inherit; padding: 0.5em; border: 1px solid #d6d3d1; border-radius: 6px; }
   button { font: inherit; padding: 0.5em 1.2em; background: #1c1917; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
-  #status { color: #b45309; font-size: 0.85em; min-height: 1.4em; }
+  button.ghost { background: #fff; color: #1c1917; border: 1px solid #d6d3d1; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #status { color: #b45309; font-size: 0.85em; min-height: 1.4em; white-space: pre-wrap; }
+  .hidden { display: none; }
   .hit { margin: 1em 0; border: 1px solid #e7e5e4; border-radius: 6px; padding: 0.8em; }
   .hit-head { font-weight: bold; font-size: 0.85em; margin-bottom: 0.4em; }
   pre { background: #f5f5f4; padding: 0.6em; overflow-x: auto; font-size: 0.8em; border-radius: 4px; white-space: pre-wrap; word-break: break-word; }
   a { color: #1d4ed8; font-size: 0.8em; }
   footer { margin-top: 2em; color: #78716c; font-size: 0.8em; }
 </style>
+<script type="importmap">{ "imports": { "@xenova/transformers": "./vendor/transformers.min.js" } }</script>
 </head>
 <body>
 <h1>Ember - live demo</h1>
 <div class="sub">Persistent, queryable memory for coding agents. This page runs Ember's real search engine in your browser.</div>
 <div id="stats">loading ...</div>
-<form id="form"><input id="q" placeholder="ask about the ember codebase - e.g. how are corrupt index files handled" autofocus><button type="submit">search</button></form>
+<div class="repo-bar">
+  <input id="repoUrl" placeholder="load any public GitHub repo: github.com/owner/repo (or /tree/branch)">
+  <button id="repoBtn" type="button">load repo</button>
+  <button id="resetBtn" type="button" class="ghost hidden">reset</button>
+</div>
+<form id="form"><input id="q" placeholder="search the loaded repo - e.g. how are corrupt index files handled" autofocus><button type="submit">search</button></form>
 <div id="status"></div>
 <div id="results"></div>
 <footer>
-  Offline lexical retrieval (deterministic, no data leaves your browser).
+  Local semantic retrieval: questions and code are embedded in your browser with the quantized all-MiniLM-L6-v2 WASM model -
+  no server, no account, no API keys, nothing leaves your machine except anonymous fetches to GitHub's public API when you load a repo.
+  Repo loading is public-only and bounded (120 files / 1.2 MB per load; GitHub's anonymous rate limit applies).
   <a href="https://github.com/dp177/ember">github.com/dp177/ember</a>
 </footer>
 <script type="module" src="./demo-web/main.js"></script>

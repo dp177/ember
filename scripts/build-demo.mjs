@@ -19,6 +19,9 @@ const hasGraph = await stat(path.join(root, ".ember", "hnsw.json")).then(() => t
 await rm(data, { recursive: true, force: true });
 await mkdir(data, { recursive: true });
 await copyFile(path.join(root, "demo-web", "index.html"), path.join(dist, "index.html"));
+// Vendored transformers.js so the browser import map resolves offline of any CDN.
+await mkdir(path.join(dist, "vendor"), { recursive: true });
+await copyFile(path.join(root, "node_modules", "@xenova", "transformers", "dist", "transformers.min.js"), path.join(dist, "vendor", "transformers.min.js"));
 for (const f of ["chunks.jsonl", "vectors.f32"]) {
   await copyFile(path.join(root, ".ember", f), path.join(data, f));
 }
