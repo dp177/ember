@@ -3,8 +3,10 @@
 // were chosen by reading the code, before any retrieval run. Metrics: top-1
 // and top-5 FILE accuracy (is an expected file the first / among the first
 // five distinct chunk hits) and MRR over that ranking. The corpus is frozen
-// per comparison: before/after numbers are only ever compared on the same
-// indexed tree.
+// at the commit recorded in eval/CORPUS_REF and materialized via `git
+// archive`, so before/after numbers are always compared on exactly the same
+// tree; the working tree moving no longer moves the benchmark. To re-base
+// the corpus intentionally, update eval/CORPUS_REF and re-measure both modes.
 //
 // Echo caveat: no eval question appears as an exact string in the corpus,
 // but product code legitimately contains NEAR-identical phrasing (e.g. the
@@ -20,15 +22,30 @@
 // legitimately discuss these topics (they are product code); the metric
 // scores the rank of the ANSWER-bearing file, so echo files count as misses
 // above it, not as hits.
-import { readFile } from "node:fs/promises";
+import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import { EmberEngine } from "../dist/core/engine.js";
 import { HashingEmbedder } from "../dist/core/embedder.js";
+import { indexRepo } from "../dist/core/indexer.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const questions = JSON.parse(await readFile(path.join(root, "eval", "questions.json"), "utf8"));
+const ref = (process.env.EMBER_EVAL_REF ?? (await readFile(path.join(root, "eval", "CORPUS_REF"), "utf8"))).trim();
 const hybrid = process.env.EMBER_HYBRID === "1";
-const engine = await EmberEngine.load(root, new HashingEmbedder(), { hybrid });
+
+const corpus = await mkdtemp(path.join(os.tmpdir(), "ember-eval-"));
+try {
+  execFileSync("git", ["archive", ref, "-o", path.join(corpus, "tree.tar")], { cwd: root });
+  execFileSync("tar", ["-xf", "tree.tar"], { cwd: corpus });
+  await rm(path.join(corpus, "tree.tar"));
+  await indexRepo(corpus, new HashingEmbedder());
+  var engine = await EmberEngine.load(corpus, new HashingEmbedder(), { hybrid });
+} catch (e) {
+  await rm(corpus, { recursive: true, force: true });
+  throw e;
+}
 
 async function runSet(key) {
   let top1 = 0, top5 = 0, mrr = 0;
@@ -49,7 +66,7 @@ async function runSet(key) {
   return { top1, top5, mrr, rows };
 }
 
-console.log(`mode: ${hybrid ? "hybrid (experimental)" : "default"}`);
+console.log(`mode: ${hybrid ? "hybrid (experimental)" : "default"}  corpus: ${ref.slice(0, 7)} (frozen)`);
 for (const key of ["q", "pq"]) {
   const { top1, top5, mrr, rows } = await runSet(key);
   const label = key === "q" ? "verbatim  " : "paraphrase";
@@ -57,3 +74,5 @@ for (const key of ["q", "pq"]) {
   const n = questions.length;
   console.log(`\n${label} top-1: ${top1}/${n}  top-5: ${top5}/${n}  MRR: ${(mrr / n).toFixed(3)}\n`);
 }
+
+await rm(corpus, { recursive: true, force: true });

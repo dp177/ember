@@ -150,15 +150,16 @@ routing, caching and discounts on the provider's side._
   excluded via `.emberignore`, but demo/docs legitimately contain
   near-identical phrasing, so each question also runs paraphrased. Default
   engine: verbatim top-1 5/15, top-5 12/15, MRR 0.483; **paraphrase top-1
-  1/15, top-5 4/15, MRR 0.133** (measured 2026-10-31 — re-run for the
-  current tree). On these 15 questions, rewording cuts accuracy sharply —
-  concrete evidence of the lexical ceiling on this corpus (not a universal
-  bound), and the motivation for semantic embeddings. Hybrid mode (BM25
-  fused at lexical weight 0.25, `--hybrid` / `EMBER_HYBRID=1`) recovers
-  much of the paraphrase loss on this corpus (top-1 2/15, top-5 7/15, MRR
-  0.241) at a small verbatim cost (top-5 11/15, MRR 0.466) — a tradeoff,
-  not a win, so it stays opt-in. Reproduce: `node scripts/eval.mjs`
-  (`EMBER_HYBRID=1` for the hybrid row).
+  2/15, top-5 4/15, MRR 0.167**. On these 15 questions, rewording cuts
+  accuracy sharply — concrete evidence of the lexical ceiling on this
+  corpus (not a universal bound), and the motivation for semantic
+  embeddings. Hybrid mode (BM25 fused at lexical weight 0.25, `--hybrid` /
+  `EMBER_HYBRID=1`) recovers some paraphrase loss on this corpus (top-5
+  6/15 vs 4/15) at a verbatim cost (top-1 4/15 vs 5/15, MRR 0.421 vs
+  0.483) — a tradeoff, not a win, so it stays opt-in. The corpus is frozen
+  at the commit pinned in `eval/CORPUS_REF`, so these numbers are
+  reproducible and comparable across changes. Reproduce:
+  `node scripts/eval.mjs` (`EMBER_HYBRID=1` for the hybrid row).
 - **HNSW is exact HNSW, not a placeholder.** M=16, efConstruction=200,
   diversity-preserving neighbor selection (paper alg. 4), serialized graph in
   `.ember/`. Tests measure recall@10 vs brute force (>0.9 on clustered data).

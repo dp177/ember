@@ -56,12 +56,13 @@ rescore by exact dot product, add a capped filename-token boost, cut to k.
 Experimental hybrid path (`--hybrid` / `EMBER_HYBRID=1`): fuse the vector
 ranking with a BM25 ranking (chunk text + filename tokens) using reciprocal
 rank fusion, lexical leg weighted 0.25. Measured on the 15-question sanity
-eval over the current corpus on 2026-10-31 (a sanity check, not a
-benchmark: 15 questions, one corpus, ±1 is noise). Default: verbatim top-1
-5/15, top-5 12/15, MRR 0.483; paraphrased top-1 1/15, top-5 4/15, MRR
-0.133. Hybrid: verbatim 5/11/0.466, paraphrase 2/7/0.241 - it recovers much
-of the paraphrase loss at a small verbatim cost; a tradeoff, not a win, so
-it is opt-in. The paraphrase collapse quantifies the lexical
+eval over the frozen corpus pinned in `eval/CORPUS_REF` (a sanity check,
+not a benchmark: 15 questions, one corpus, ±1 is noise). Default: verbatim
+top-1 5/15, top-5 12/15, MRR 0.483; paraphrased top-1 2/15, top-5 4/15,
+MRR 0.167. Hybrid: verbatim 4/11/0.421, paraphrase 2/6/0.228 - it recovers
+some paraphrase loss at a verbatim cost; a tradeoff, not a win, so it is
+opt-in. Freezing the corpus at a commit (materialized via `git archive`)
+keeps every before/after comparison on exactly the same tree. The paraphrase collapse quantifies the lexical
 embedder's core limitation and motivates semantic embeddings (M2). Equal weighting was measured and rejected (top-5 13 -> 10
 on the earlier corpus: exact-match ranking over-rewards files that echo
 query phrasing).

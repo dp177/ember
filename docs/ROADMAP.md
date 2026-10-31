@@ -83,9 +83,11 @@ Spend discipline for the paid run (authority-critical):
       preserve notes/usage files. One memoized process-wide provider client
       across CLI, MCP and the web UI makes EMBER_MAX_CALLS per-process for
       real (previously each UI/MCP request restarted the counter). Eval
-      re-measured on the current corpus: default verbatim 5/12/0.483,
-      paraphrase 1/4/0.133; hybrid verbatim 5/11/0.466, paraphrase
-      2/7/0.241.
+      re-measured on the frozen corpus pinned in eval/CORPUS_REF: default
+      verbatim 5/12/0.483, paraphrase 2/4/0.167; hybrid verbatim 4/11/0.421,
+      paraphrase 2/6/0.228. The eval now materializes the pinned commit via
+      `git archive`, so the benchmark no longer moves with the working tree;
+      re-base intentionally by updating the ref and re-measuring both modes.
 
 ## M4 - Portfolio-grade presentation (mostly done)
 

@@ -4,12 +4,11 @@
  * capped filename boost. An experimental hybrid mode (EMBER_HYBRID=1 or
  * --hybrid) additionally fuses a BM25 lexical ranking via weighted
  * reciprocal rank fusion. Measured on the 15-question same-repo sanity
- * eval on the current corpus (measured 2026-10-31):
- *   baseline:            top-1 5/15, top-5 12/15, MRR 0.483 (paraphrase 1/15, 4/15, 0.133)
- *   hybrid, weight 0.25: top-1 5/15, top-5 11/15, MRR 0.466 (paraphrase 2/15, 7/15, 0.241)
- * i.e. hybrid recovers much of the paraphrase loss but gives back a little
- * verbatim top-5 and MRR - a tradeoff, not a clear win, so hybrid stays
- * opt-in until real
+ * eval on the frozen corpus pinned in eval/CORPUS_REF:
+ *   baseline:            top-1 5/15, top-5 12/15, MRR 0.483 (paraphrase 2/15, 4/15, 0.167)
+ *   hybrid, weight 0.25: top-1 4/15, top-5 11/15, MRR 0.421 (paraphrase 2/15, 6/15, 0.228)
+ * i.e. hybrid recovers some paraphrase loss but gives back verbatim top-1
+ * and MRR - a tradeoff, not a clear win, so hybrid stays opt-in until real
  * semantic embeddings (where the two legs genuinely diverge) are verified.
  * Small 15-question, single-corpus eval; treat differences of 1 as noise.
  * Reproduce: node scripts/eval.mjs (EMBER_HYBRID=1 for the hybrid row). */
