@@ -65,9 +65,16 @@ test("embedderFromEnv precedence: provider > explicit lexical opt-out > local se
   assert.equal(embedderFromEnv({ EMBER_LOCAL_EMBED_MODEL: "Xenova/bge-small", EMBER_LOCAL_EMBED_DIM: "512" }).kind, "local-wasm:Xenova/bge-small");
   // Explicit lexical opt-out.
   assert.ok(embedderFromEnv({ EMBER_LEXICAL: "1" }) instanceof HashingEmbedder);
+  // Provider config alone is NOT enough: remote embeddings need the explicit
+  // EMBER_REMOTE_EMBED=1 opt-in (retrieval is local by requirement).
   assert.equal(
-    embedderFromEnv({ EMBER_API_BASE: "http://x", EMBER_API_KEY: "k", EMBER_EMBED_MODEL: "m", EMBER_LEXICAL: "1" }).kind,
+    embedderFromEnv({ EMBER_API_BASE: "http://x", EMBER_API_KEY: "k", EMBER_EMBED_MODEL: "m", EMBER_LEXICAL: "1", EMBER_REMOTE_EMBED: "1" }).kind,
     "http-openai-compatible:m",
-    "explicit provider config wins over the lexical opt-out and the semantic default",
+    "explicit remote opt-in wins over the lexical opt-out and the semantic default",
+  );
+  assert.equal(
+    embedderFromEnv({ EMBER_API_BASE: "http://x", EMBER_API_KEY: "k", EMBER_EMBED_MODEL: "m" }).kind,
+    `local-wasm:${DEFAULT_LOCAL_EMBED_MODEL}`,
+    "provider config without EMBER_REMOTE_EMBED=1 must not send code remotely - local default wins",
   );
 });

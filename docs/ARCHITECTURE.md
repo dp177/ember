@@ -33,19 +33,25 @@ scan -> chunk -> embed -> persist (.ember/)   [HNSW only with EMBER_HNSW=1]
    `file / startLine / endLine / symbol / text`, which is what makes
    `file:line` citations exact.
 3. **Embed** (`embedder.ts`): pluggable. Resolution order
-   (`embedderChoiceFromEnv`): explicit provider config, then the explicit
-   lexical opt-out (`EMBER_LEXICAL=1`), then the default local semantic
-   model. The CLI prints the choice and its reason on stderr whenever it is
-   not the default, so a non-default engine is never selected silently.
+   (`embedderChoiceFromEnv`): explicit remote opt-in (`EMBER_REMOTE_EMBED=1`
+   plus provider config), then the explicit lexical opt-out
+   (`EMBER_LEXICAL=1`), then the default local semantic model. Retrieval is
+   local by requirement: provider config alone never selects remote
+   embeddings - it produces a warning and the local default. Remote chat
+   synthesis (`EMBER_CHAT_MODEL`) is configured separately and does not
+   affect retrieval. The CLI prints the choice and its reason on stderr
+   whenever it is not the default, so a non-default engine is never
+   selected silently.
    - Default `LocalEmbedder`: all-MiniLM-L6-v2 in WASM (see below).
    - Opt-out `HashingEmbedder`: deterministic, offline, lexical. Tokenizes
      code (camelCase/snake_case split, light stemming) and hashes tokens into
      a 1024-dim vector (FNV-1a, signed slots, log TF). Matches shared
      vocabulary; does not paraphrase. Diagnostic/baseline mode, not the
      product default.
-   - Optional `HttpEmbedder`: any OpenAI-compatible `/embeddings` endpoint.
-     The returned dimension is validated against `EMBER_EMBED_DIM` - a
-     mismatch fails loudly instead of corrupting the store.
+   - Opt-in `HttpEmbedder`: any OpenAI-compatible `/embeddings` endpoint,
+     gated behind `EMBER_REMOTE_EMBED=1`. The returned dimension is
+     validated against `EMBER_EMBED_DIM` - a mismatch fails loudly instead
+     of corrupting the store.
 4. **Index structure**: default is none - retrieval is an exact flat scan
    over `vectors.f32`. Measured basis: identical results to the graph on the
    frozen eval corpus; the graph build cost is superlinear (measured in the

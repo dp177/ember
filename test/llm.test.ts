@@ -185,7 +185,7 @@ test("sharedClientFromEnv: chat + embeddings share one process-wide request cap"
     },
   };
   const { base, close } = await mockServer(spec);
-  const env = { EMBER_API_BASE: base, EMBER_API_KEY: "k", EMBER_CHAT_MODEL: "m", EMBER_EMBED_MODEL: "m", EMBER_EMBED_DIM: "4", EMBER_MAX_CALLS: "2" };
+  const env = { EMBER_API_BASE: base, EMBER_API_KEY: "k", EMBER_CHAT_MODEL: "m", EMBER_EMBED_MODEL: "m", EMBER_EMBED_DIM: "4", EMBER_MAX_CALLS: "2", EMBER_REMOTE_EMBED: "1" };
   const logger = new JsonlUsageLogger(path.join(dir, "usage.jsonl"));
   const client = sharedClientFromEnv(env, logger);
   assert.ok(client, "configured env yields a client");

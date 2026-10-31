@@ -137,13 +137,14 @@ test("ui: EMBER_MAX_CALLS holds across requests (one process-wide provider clien
   });
   await new Promise<void>(r => mock.listen(0, "127.0.0.1", r));
   const mockPort = (mock.address() as AddressInfo).port;
-  const KEYS = ["EMBER_API_BASE", "EMBER_API_KEY", "EMBER_EMBED_MODEL", "EMBER_EMBED_DIM", "EMBER_MAX_CALLS"];
+  const KEYS = ["EMBER_API_BASE", "EMBER_API_KEY", "EMBER_EMBED_MODEL", "EMBER_EMBED_DIM", "EMBER_MAX_CALLS", "EMBER_REMOTE_EMBED"];
   const saved = Object.fromEntries(KEYS.map(k => [k, process.env[k]]));
   try {
     process.env.EMBER_API_BASE = `http://127.0.0.1:${mockPort}`;
     process.env.EMBER_API_KEY = "k";
     process.env.EMBER_EMBED_MODEL = "m";
     process.env.EMBER_EMBED_DIM = "4";
+    process.env.EMBER_REMOTE_EMBED = "1"; // remote embeddings need this explicit opt-in since v0.7.0
     await indexRepo(dir, embedderFromEnv());
     const callsAfterIndex = calls;
     // The cap is configured only now: the server's provider client must be
@@ -167,4 +168,27 @@ test("ui: EMBER_MAX_CALLS holds across requests (one process-wide provider clien
     await new Promise(r => mock.close(() => r(null)));
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+test("ui: the engine is cached across requests and a re-index invalidates it", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ember-uicache-"));
+  try {
+    await fs.writeFile(path.join(dir, "a.ts"), "export function alphaCache(): number { return 1; }\n");
+    await indexRepo(dir, new HashingEmbedder());
+    const server = createUiServer(dir, { embedder: new HashingEmbedder() });
+    await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const first = await (await fetch(`${base}/api/search?q=alphaCache`)).json() as any;
+      assert.ok(first.hits.length > 0);
+      const second = await (await fetch(`${base}/api/search?q=alphaCache`)).json() as any;
+      assert.deepEqual(second.hits, first.hits, "cached engine serves consistent results");
+      // Re-index with new content: the next search must see it (no stale cache).
+      await fs.writeFile(path.join(dir, "b.ts"), "export function betaCache(): number { return 2; }\n");
+      const re = await fetch(`${base}/api/index`, { method: "POST" });
+      assert.equal(re.status, 200);
+      const third = await (await fetch(`${base}/api/search?q=betaCache`)).json() as any;
+      assert.ok(third.hits.some((h: any) => h.file === "b.ts"), "post-reindex search sees the new file");
+    } finally { await new Promise<void>(r => server.close(() => r())); }
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

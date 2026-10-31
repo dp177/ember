@@ -105,16 +105,27 @@ Then ask your agent to call `index_repo` once, and `repo_map` / `search_code`
 
 ## LLM configuration (optional)
 
-Everything above works offline. For semantic embeddings and synthesized
-answers, point Ember at any OpenAI-compatible API (OpenRouter, Ollama, …):
+Everything above works offline. Retrieval is local by requirement: remote
+embeddings are NEVER selected by provider config alone. To send code and
+query text to an OpenAI-compatible provider for embeddings (OpenRouter,
+Ollama, …), opt in explicitly:
 
 ```bash
 export EMBER_API_BASE=https://openrouter.ai/api/v1
 export EMBER_API_KEY=...
 export EMBER_EMBED_MODEL=<an embedding model>   # semantic embeddings
 export EMBER_EMBED_DIM=<its dimension>
-export EMBER_CHAT_MODEL=<a chat model>          # synthesized answers
+export EMBER_REMOTE_EMBED=1                     # required explicit opt-in for remote embeddings
 node dist/cli.js index --full --path /path/to/repo   # re-embed with the new embedder
+```
+
+Without `EMBER_REMOTE_EMBED=1`, an `EMBER_EMBED_MODEL` setting prints a
+note and the local semantic default is used instead - no indexed text
+leaves the machine. Synthesized answers are configured separately and do
+not affect retrieval:
+
+```bash
+export EMBER_CHAT_MODEL=<a chat model>          # synthesized answers
 ```
 
 (`EMBER_CHAT_BASE` is still honored as a legacy alias for `EMBER_API_BASE`.)

@@ -20,6 +20,7 @@ export async function startMcpServer(defaultRoot: string): Promise<void> {
   const server = new McpServer({ name: "ember", version: "0.2.0" });
   {
     const choice = embedderChoiceFromEnv();
+    if (choice.warning) console.error(`note: ${choice.warning}`);
     if (!choice.embedder.kind.startsWith("local-wasm:")) console.error(`embedder: ${choice.embedder.kind} - ${choice.reason}`);
   }
   const engines = new Map<string, { engine: Promise<EmberEngine>; stamp: string }>();

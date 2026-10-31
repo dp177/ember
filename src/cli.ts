@@ -29,7 +29,8 @@ const hybridOf = (opts: { hybrid?: boolean }) => ({ hybrid: opts.hybrid || proce
 /** Resolve the embedder for a CLI command and disclose any non-default
  * choice on stderr - remote or lexical selection must never be silent. */
 function cliEmbedder(usage?: Parameters<typeof embedderChoiceFromEnv>[1]) {
-  const { embedder, reason } = embedderChoiceFromEnv(process.env, usage);
+  const { embedder, reason, warning } = embedderChoiceFromEnv(process.env, usage);
+  if (warning) console.error(`note: ${warning}`);
   if (!embedder.kind.startsWith("local-wasm:")) console.error(`embedder: ${embedder.kind} - ${reason}`);
   return embedder;
 }

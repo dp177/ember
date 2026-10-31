@@ -129,34 +129,37 @@ export function embedderFromEnv(
   env: Record<string, string | undefined> = typeof process !== "undefined" ? process.env : {},
   usage?: UsageLogger,
 ): Embedder {
-  const cfg = llmConfigFromEnv(env);
-  if (cfg?.embedModel) {
-    const dim = cfg.embedDim ?? 1536;
-    // Shared process-wide client: the request cap and usage accounting
-    // aggregate across every caller in this process, per the docs.
-    return new HttpEmbedder(sharedClientFromEnv(env, usage)!, undefined, cfg.embedModel, dim);
-  }
   return embedderChoiceFromEnv(env, usage).embedder;
 }
 
 /** Resolve the embedder AND why it was chosen, so callers can surface the
- * choice instead of silently selecting a non-default engine. */
+ * choice instead of silently selecting a non-default engine.
+ *
+ * Retrieval is local by requirement: remote embeddings need BOTH provider
+ * config AND the explicit EMBER_REMOTE_EMBED=1 opt-in. Provider config
+ * alone (even a previously working EMBER_EMBED_MODEL) never sends code or
+ * query text to a provider; it produces a warning instead. Remote CHAT
+ * (the ask command's synthesis) is configured separately and is unaffected. */
 export function embedderChoiceFromEnv(
   env: Record<string, string | undefined> = typeof process !== "undefined" ? process.env : {},
   usage?: UsageLogger,
-): { embedder: Embedder; reason: string } {
+): { embedder: Embedder; reason: string; warning?: string } {
   const cfg = llmConfigFromEnv(env);
-  if (cfg?.embedModel) {
+  if (cfg?.embedModel && env.EMBER_REMOTE_EMBED === "1") {
     const dim = cfg.embedDim ?? 1536;
     return {
       embedder: new HttpEmbedder(sharedClientFromEnv(env, usage)!, undefined, cfg.embedModel, dim),
-      reason: `EMBER_EMBED_MODEL=${cfg.embedModel} is configured - remote provider embeddings, indexed text leaves this machine`,
+      reason: `EMBER_REMOTE_EMBED=1 with EMBER_EMBED_MODEL=${cfg.embedModel} - explicit remote embedding opt-in, indexed text leaves this machine`,
     };
   }
+  let warning: string | undefined;
+  if (cfg?.embedModel) {
+    warning = `EMBER_EMBED_MODEL=${cfg.embedModel} is set but remote embeddings require the explicit EMBER_REMOTE_EMBED=1 opt-in - using the local semantic default instead (no text leaves this machine)`;
+  }
   if (env.EMBER_LEXICAL === "1") {
-    return { embedder: new HashingEmbedder(), reason: "explicit lexical opt-out (EMBER_LEXICAL=1) - diagnostic/baseline mode, not the product default" };
+    return { embedder: new HashingEmbedder(), reason: "explicit lexical opt-out (EMBER_LEXICAL=1) - diagnostic/baseline mode, not the product default", warning };
   }
   // Default: the local semantic model. EMBER_LOCAL_EMBED / EMBER_LOCAL_EMBED_MODEL
   // / EMBER_LOCAL_EMBED_DIM still override the model choice.
-    return { embedder: localEmbedderFromEnv(env) ?? new LocalEmbedder(), reason: "local semantic default (WASM, offline after a one-time model download)" };
+  return { embedder: localEmbedderFromEnv(env) ?? new LocalEmbedder(), reason: "local semantic default (WASM, offline after a one-time model download)", warning };
 }

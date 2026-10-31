@@ -45,9 +45,19 @@ async function loadEngine(root: string, opts: UiOptions): Promise<EmberEngine> {
   return EmberEngine.load(root, embedder, { hybrid: opts.hybrid });
 }
 
+/** Source-grounded freshness stamp of the persisted index (same pattern as
+ * the MCP server): checked only when a request actually needs the engine. */
+async function storeStamp(root: string): Promise<string | null> {
+  try {
+    const st = await fs.stat(path.join(root, ".ember", "meta.json"));
+    return `${st.mtimeMs}:${st.size}`;
+  } catch { return null; }
+}
+
 export function createUiServer(root: string, opts: UiOptions = {}): http.Server {
   if (!opts.embedder) {
     const choice = embedderChoiceFromEnv(process.env, JsonlUsageLogger.forRepo(root));
+    if (choice.warning) console.error(`note: ${choice.warning}`);
     if (!choice.embedder.kind.startsWith("local-wasm:")) console.error(`embedder: ${choice.embedder.kind} - ${choice.reason}`);
   }
   // One process-wide provider client backs chat and embeddings alike
@@ -55,6 +65,21 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
   // across requests, and its serialized queue keeps concurrent asks from
   // fanning out to the provider.
   const client = (): LlmClient | null => sharedClientFromEnv(process.env, JsonlUsageLogger.forRepo(root));
+
+  // Cache the loaded engine and its embedder across requests: with the
+  // semantic default, a per-request load would reload the WASM model and
+  // re-read every vector on each search. The stamp check keeps an external
+  // re-index (CLI, another agent) honest; a failed load is never cached.
+  let cached: { stamp: string; engine: Promise<EmberEngine> } | null = null;
+  const engineFor = async (): Promise<EmberEngine> => {
+    const stamp = await storeStamp(root);
+    if (cached && stamp !== null && cached.stamp === stamp) return cached.engine;
+    const p = loadEngine(root, opts);
+    p.catch(() => { if (cached?.engine === p) cached = null; });
+    cached = { stamp: stamp ?? "missing", engine: p };
+    return p;
+  };
+
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
@@ -94,6 +119,7 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
 
       if (route === "/api/index" && req.method === "POST") {
         const r = await indexRepo(root, opts.embedder ?? embedderFromEnv(process.env, JsonlUsageLogger.forRepo(root)), undefined, { full: url.searchParams.get("full") === "1" });
+        cached = null; // next request loads the fresh index
         json(res, 200, r);
         return;
       }
@@ -101,7 +127,7 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
       if (route === "/api/search") {
         const q = url.searchParams.get("q") ?? "";
         const k = Math.min(parseInt(url.searchParams.get("k") ?? "8", 10) || 8, 50);
-        const engine = await loadEngine(root, opts);
+        const engine = await engineFor();
         const hits = await engine.search(q, k);
         json(res, 200, {
           query: q,
@@ -115,7 +141,7 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
 
       if (route === "/api/ask") {
         const q = url.searchParams.get("q") ?? "";
-        const engine = await loadEngine(root, opts);
+        const engine = await engineFor();
         const r = await answerQuestion(engine, q, 10, { client: client() });
         json(res, 200, {
           question: q, answer: r.text, synthesized: r.synthesized,

@@ -34,9 +34,14 @@ test("choice disclosure: default names local semantic; provider and lexical choi
   const dflt = embedderChoiceFromEnv({});
   assert.equal(dflt.embedder.kind, `local-wasm:${DEFAULT_LOCAL_EMBED_MODEL}`);
   assert.match(dflt.reason, /local semantic default/);
-  const provider = embedderChoiceFromEnv({ EMBER_API_BASE: "http://x", EMBER_API_KEY: "k", EMBER_EMBED_MODEL: "m" });
+  // Legacy provider config alone must NOT route code/query text remotely:
+  // retrieval is local by requirement; the choice carries a warning instead.
+  const legacy = embedderChoiceFromEnv({ EMBER_API_BASE: "http://x", EMBER_API_KEY: "k", EMBER_EMBED_MODEL: "m" });
+  assert.equal(legacy.embedder.kind, `local-wasm:${DEFAULT_LOCAL_EMBED_MODEL}`);
+  assert.match(legacy.warning ?? "", /EMBER_REMOTE_EMBED=1/);
+  const provider = embedderChoiceFromEnv({ EMBER_API_BASE: "http://x", EMBER_API_KEY: "k", EMBER_EMBED_MODEL: "m", EMBER_REMOTE_EMBED: "1" });
   assert.equal(provider.embedder.kind, "http-openai-compatible:m");
-  assert.match(provider.reason, /remote provider embeddings.*leaves this machine/, "provider selection must disclose that text leaves the machine");
+  assert.match(provider.reason, /explicit remote embedding opt-in.*leaves this machine/, "provider selection must disclose that text leaves the machine");
   const lexical = embedderChoiceFromEnv({ EMBER_LEXICAL: "1" });
   assert.equal(lexical.embedder.kind, "local-hashing-lexical");
   assert.match(lexical.reason, /explicit lexical opt-out.*not the product default/s);
