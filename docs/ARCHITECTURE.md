@@ -191,6 +191,31 @@ command remains the hash-accurate check. The hint stats indexed paths
 directly rather than walking the tree, because a recursive stat walk
 measured ~80-110 ms on 2,102 files - half of query latency.
 
+## Resumable indexing
+
+Embedding dominates index time on the semantic default (measured 46 s for
+814 chunks on a 2-core, 2 GB test machine), so an interrupted run -
+Ctrl-C, OOM, a crash - used to lose all embedded work and start over.
+Indexing now checkpoints progress and a rerun resumes it:
+
+- The checkpoint lives in a sibling directory `.ember.checkpoint/`, never
+  inside the live `.ember/` generation. An interrupted run therefore
+  leaves the previous COMPLETE index untouched and searchable throughout.
+  The scanner skips `.ember.checkpoint/`.
+- Embedding proceeds file by file; a file's hash enters the checkpoint
+  only after ALL its chunks are embedded, so the file is the atomic
+  resume unit and a half-embedded file is simply redone.
+- A checkpoint is written every 200 files or 2,000 chunks
+  (`EMBER_CHECKPOINT_FILES` / `EMBER_CHECKPOINT_CHUNKS` override), staged
+  in a tmp directory and renamed into place.
+- On the next run a checkpoint whose embedder kind and dimension match
+  becomes the reuse baseline. A model change or a torn checkpoint is
+  discarded and the run falls back to the live index, or to a full
+  re-embed when none is usable. Per-file sha1s are re-validated against
+  the current source on resume, so files edited between the crash and
+  the rerun are re-embedded.
+- A completed run (or `ember index --full`) clears the checkpoint.
+
 ## Testing strategy
 
 80 tests, hermetic from a fresh clone (`npm test` builds first). Provider

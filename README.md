@@ -209,6 +209,14 @@ routing, caching and discounts on the provider's side._
   when you first enable local semantic embeddings. Ember itself sends no
   telemetry anywhere.
 
+- **Interrupted indexing resumes.** Embedding work is checkpointed to
+  `.ember.checkpoint/` (a sibling of the live `.ember/`, which stays
+  searchable throughout) every 200 files or 2,000 chunks
+  (`EMBER_CHECKPOINT_FILES` / `EMBER_CHECKPOINT_CHUNKS` override). A rerun
+  validates the embedder identity and per-file hashes, keeps checkpointed
+  work, and embeds only the rest; a model change or a torn checkpoint is
+  discarded. A completed run or `ember index --full` clears it.
+
 ## How it fits together
 
 ```

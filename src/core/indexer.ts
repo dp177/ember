@@ -13,6 +13,53 @@ import { EmberStore, type ChunkRecord, type IndexMeta, type FileHashMap } from "
 
 export interface IndexOptions { full?: boolean; }
 
+/** Resumable-indexing checkpoint, stored in a SIBLING directory
+ * (.ember.checkpoint/) - never in the live .ember/ generation, so an
+ * interrupted run always leaves the previous COMPLETE index searchable.
+ * The checkpoint carries the embedder identity; a model/dim change
+ * invalidates it, and per-file sha1s are re-validated against the current
+ * source on resume (changed files are simply re-embedded). */
+interface Checkpoint {
+  embedderKind: string;
+  dim: number;
+  hashes: FileHashMap; // only files FULLY processed so far
+  chunkCount: number;
+}
+
+const checkpointDir = (root: string) => `${root}/.ember.checkpoint`;
+
+async function writeCheckpoint(root: string, cp: Checkpoint, chunks: ChunkRecord[], vectors: Float32Array[]): Promise<void> {
+  const dir = checkpointDir(root);
+  const tmp = `${dir}.tmp-${process.pid}`;
+  await fs.rm(tmp, { recursive: true, force: true });
+  await fs.mkdir(tmp, { recursive: true });
+  await fs.writeFile(`${tmp}/checkpoint.json`, JSON.stringify(cp));
+  await fs.writeFile(`${tmp}/chunks.jsonl`, chunks.map(c => JSON.stringify(c)).join("\n") + "\n");
+  const buf = Buffer.alloc(vectors.length * cp.dim * 4);
+  vectors.forEach((v, i) => { Buffer.from(v.buffer, v.byteOffset, cp.dim * 4).copy(buf, i * cp.dim * 4); });
+  await fs.writeFile(`${tmp}/vectors.f32`, buf);
+  await fs.rm(dir, { recursive: true, force: true });
+  await fs.rename(tmp, dir);
+}
+
+async function readCheckpoint(root: string, embedder: Embedder): Promise<{ cp: Checkpoint; chunks: ChunkRecord[]; vectors: Float32Array[] } | null> {
+  const dir = checkpointDir(root);
+  try {
+    const cp = JSON.parse(await fs.readFile(`${dir}/checkpoint.json`, "utf8")) as Checkpoint;
+    if (cp.embedderKind !== embedder.kind || cp.dim !== embedder.dim) return null; // model change: discard
+    const chunks = (await fs.readFile(`${dir}/chunks.jsonl`, "utf8")).trim().split("\n").filter(Boolean).map(l => JSON.parse(l) as ChunkRecord);
+    const raw = await fs.readFile(`${dir}/vectors.f32`);
+    const vectors: Float32Array[] = [];
+    for (let i = 0; i < chunks.length; i++) vectors.push(new Float32Array(raw.buffer, raw.byteOffset + i * cp.dim * 4, cp.dim).slice());
+    if (vectors.length !== cp.chunkCount) return null; // torn checkpoint: discard
+    return { cp, chunks, vectors };
+  } catch { return null; }
+}
+
+async function clearCheckpoint(root: string): Promise<void> {
+  await fs.rm(checkpointDir(root), { recursive: true, force: true });
+}
+
 export interface IndexResult {
   files: number;
   chunks: number;
@@ -63,7 +110,23 @@ export async function indexRepo(
       }
     }
   }
-  const canReuse = oldVectors !== null && oldChunks.length > 0;
+  let canReuse = oldVectors !== null && oldChunks.length > 0;
+
+  // Resumable indexing: a valid checkpoint from an interrupted run takes
+  // over as the old state (it already includes everything reused from the
+  // live index). Model/dim changes or a torn checkpoint discard it.
+  if (opts.full) {
+    await clearCheckpoint(root);
+  } else {
+    const resumed = await readCheckpoint(root, embedder);
+    if (resumed) {
+      oldChunks = resumed.chunks;
+      oldVectors = new Map(resumed.chunks.map((c, i) => [c.id, resumed.vectors[i]]));
+      oldHashes = resumed.cp.hashes;
+      canReuse = true;
+      log(`resuming from checkpoint: ${resumed.chunks.length} chunks already embedded`);
+    }
+  }
 
   log(`scanning ${root} ...`);
   // The scan cap keeps indexing memory bounded: scanRepo holds every
@@ -109,22 +172,40 @@ export async function indexRepo(
     index?.add(chunks.length - 1, keptVectors[i]);
   }
 
-  const fresh: CodeChunk[] = [];
-  for (const f of changed) for (const c of chunkFile(f.relPath, f.content)) fresh.push(c);
+  const freshByFile: { file: string; chunks: CodeChunk[] }[] = [];
+  for (const f of changed) {
+    const fc = chunkFile(f.relPath, f.content);
+    if (fc.length > 0) freshByFile.push({ file: f.relPath, chunks: fc });
+  }
+  const freshTotal = freshByFile.reduce((n, f) => n + f.chunks.length, 0);
 
-  if (fresh.length > 0) {
-    log(`embedding ${fresh.length} new/changed chunks (${embedder.kind}) ...`);
-    const BATCH = 64;
-    for (let i = 0; i < fresh.length; i += BATCH) {
-      const batch = fresh.slice(i, i + BATCH);
-      const inputs = batch.map(c => `${c.file}${c.symbol ? " :: " + c.symbol : ""}\n${c.text}`);
+  if (freshByFile.length > 0) {
+    log(`embedding ${freshTotal} new/changed chunks from ${freshByFile.length} files (${embedder.kind}) ...`);
+    // Per-file embedding makes every file an atomic resume unit: a file's
+    // hash enters the checkpoint only after ALL its chunks are embedded.
+    const processedHashes: FileHashMap = {};
+    for (const c of chunks) {
+      const nh = newHashes[c.file];
+      if (nh) processedHashes[c.file] = nh; // kept (unchanged) files are complete already
+    }
+    let doneFiles = 0, doneChunks = 0, sinceCheckpoint = 0;
+    const CHECKPOINT_EVERY_FILES = parseInt(process.env.EMBER_CHECKPOINT_FILES ?? "", 10) || 200;
+    const CHECKPOINT_EVERY_CHUNKS = parseInt(process.env.EMBER_CHECKPOINT_CHUNKS ?? "", 10) || 2000;
+    for (const { file, chunks: fc } of freshByFile) {
+      const inputs = fc.map(c => `${c.file}${c.symbol ? " :: " + c.symbol : ""}\n${c.text}`);
       const vs = await embedder.embed(inputs);
       vs.forEach((v, j) => {
-        chunks.push({ ...batch[j], id: chunks.length });
+        chunks.push({ ...fc[j], id: chunks.length });
         vectors.push(v);
         index?.add(chunks.length - 1, v);
       });
-      if (fresh.length > BATCH) log(`embedded ${Math.min(i + BATCH, fresh.length)}/${fresh.length}`);
+      processedHashes[file] = newHashes[file];
+      doneFiles++; doneChunks += fc.length; sinceCheckpoint += fc.length;
+      if (doneFiles % CHECKPOINT_EVERY_FILES === 0 || sinceCheckpoint >= CHECKPOINT_EVERY_CHUNKS) {
+        await writeCheckpoint(root, { embedderKind: embedder.kind, dim: embedder.dim, hashes: processedHashes, chunkCount: chunks.length }, chunks, vectors);
+        sinceCheckpoint = 0;
+        log(`embedded ${doneChunks}/${freshTotal} chunks (${doneFiles}/${freshByFile.length} files) - checkpoint saved`);
+      }
     }
   }
 
@@ -142,12 +223,13 @@ export async function indexRepo(
     capped: scan.capped,
   };
   await store.save(meta, chunks, vectors, index, newHashes);
+  await clearCheckpoint(root); // completed: the resume state is no longer needed
   return {
     files: files.length,
     chunks: chunks.length,
     dim: embedder.dim,
     kept: kept.length,
-    embedded: fresh.length,
+    embedded: freshTotal,
     incremental: canReuse,
     capped: scan.capped,
   };

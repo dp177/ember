@@ -18,6 +18,8 @@ const SKIP_DIRS = new Set([
   "node_modules", ".git", ".hg", ".svn", "dist", "build", "out", "target",
   "vendor", "__pycache__", ".next", ".nuxt", ".cache", "coverage", ".idea",
   ".vscode", "venv", ".venv", "env", ".ember", "tmp", "temp", "logs", "dist-test",
+  // resumable-indexing checkpoints live OUTSIDE .ember (see indexer.ts)
+  ".ember.checkpoint",
 ]);
 
 const SKIP_FILES = new Set([
