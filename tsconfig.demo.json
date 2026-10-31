@@ -19,6 +19,7 @@
     "demo-web/main.ts",
     "demo-web/search-core.ts",
     "demo-web/repo-loader.ts",
+    "demo-web/recent-repos.ts",
     "demo-web/env.d.ts",
     "src/core/hnsw.ts",
     "src/core/hashing-embedder.ts",

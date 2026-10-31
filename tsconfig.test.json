@@ -18,6 +18,7 @@
   "include": [
     "src/**/*.ts",
     "test/**/*.ts",
-    "demo-web/search-core.ts"
+    "demo-web/search-core.ts",
+    "demo-web/recent-repos.ts"
   ]
 }
