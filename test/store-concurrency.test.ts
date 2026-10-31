@@ -199,16 +199,24 @@ test("a freshly-created incomplete lock fails closed (create-in-progress window)
   }
 });
 
-test("an incomplete lock clearly past the create window is reclaimed", async () => {
+test("an unidentifiable lock is never auto-reclaimed; the error names the manual recovery path", async () => {
   const dir = await freshRepo("ember-partial-old-");
   try {
     const lock = path.join(dir, ".ember.lock");
     await fs.writeFile(lock, "");
     const old = new Date(Date.now() - 120_000);
-    await fs.utimes(lock, old, old);
+    await fs.utimes(lock, old, old); // age is not proof of a dead owner
     await fs.writeFile(path.join(dir, "a.ts"), "export function alphaConc(): number { return 12; }\n");
+    await assert.rejects(indexRepo(dir, new HashingEmbedder()), /another ember process is writing/, "fails closed");
+    try {
+      await indexRepo(dir, new HashingEmbedder());
+    } catch (e) {
+      assert.ok((e as Error).message.includes(".ember.lock"), "error names the lock file for manual recovery");
+    }
+    // Manual recovery: user removes the lock with no ember process running.
+    await fs.rm(lock);
     await indexRepo(dir, new HashingEmbedder());
-    assert.ok((await new EmberStore(dir).load()).chunks.length > 0, "save proceeds past the create grace");
+    assert.ok((await new EmberStore(dir).load()).chunks.length > 0, "save proceeds after manual recovery");
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

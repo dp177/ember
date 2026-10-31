@@ -24,9 +24,9 @@
  * file); a torn read that mixes two sets is detected by generation
  * mismatch or consistency validation and retried once before failing.
  * A lock left by a crashed process is reclaimed only when its recorded
- * pid no longer exists; age alone never reclaims a live writer's lock,
- * and an unidentifiable lock fails closed rather than admitting a
- * second writer.
+ * pid no longer exists. An unidentifiable lock (malformed, unreadable,
+ * no pid) is never auto-reclaimed: the writer-conflict error names the
+ * file so the user can remove it manually once no ember process runs.
  * After a crash, the next open (read or write) reclaims the dead lock
  * and restores the backup; if the lock somehow blocks, the error names
  * the lock file to remove.
@@ -73,26 +73,20 @@ export class EmberStore {
   }
 
   /** Classify the lock. Reclaim ("dead") only when the owner is provably
-   * gone: recorded pid no longer exists on this host (ESRCH), or the file
-   * is malformed/empty AND older than the create grace - a writer creates
-   * the file before its content lands, so a fresh malformed lock is a
-   * create-in-progress, not a corpse. Anything unknown (unreadable,
-   * EPERM = alive for another user, pid reuse) fails closed as "live":
-   * never admit a second writer on a guess. */
-  private static readonly LOCK_CREATE_GRACE_MS = 30_000;
-
+   * gone: the recorded pid no longer exists on this host (ESRCH). Every
+   * other state - malformed or empty content (possibly a create-in-progress
+   * or a paused writer), unreadable file, EPERM (alive for another user),
+   * pid reuse - fails closed as "live". An unidentified lock is never
+   * auto-removed: the error names the file for manual recovery. */
   private async lockState(): Promise<"live" | "dead"> {
-    let mtimeMs: number;
-    try { mtimeMs = (await fs.stat(this.lockPath)).mtimeMs; }
-    catch { return "dead"; } // no lock
-    const pastGrace = Date.now() - mtimeMs > EmberStore.LOCK_CREATE_GRACE_MS;
     let raw: { pid?: number };
     try {
       raw = JSON.parse(await fs.readFile(this.lockPath, "utf8")) as { pid?: number };
-    } catch {
-      return pastGrace ? "dead" : "live"; // malformed: fail closed while fresh
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return "dead"; // no lock
+      return "live"; // malformed, empty or unreadable: owner unknown, fail closed
     }
-    if (typeof raw.pid !== "number") return pastGrace ? "dead" : "live";
+    if (typeof raw.pid !== "number") return "live";
     try { process.kill(raw.pid, 0); return "live"; }
     catch (e) { return (e as NodeJS.ErrnoException).code === "ESRCH" ? "dead" : "live"; }
   }
