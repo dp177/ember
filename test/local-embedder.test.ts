@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { LocalEmbedder, localEmbedderFromEnv, DEFAULT_LOCAL_EMBED_MODEL, type FeatureExtractor } from "../src/core/local-embedder.js";
+import { LocalEmbedder, localEmbedderFromEnv, defaultModelCacheDir, DEFAULT_LOCAL_EMBED_MODEL, type FeatureExtractor } from "../src/core/local-embedder.js";
 import { embedderFromEnv, HashingEmbedder } from "../src/core/embedder.js";
 
 function stub(dim: number, calls: string[][]): FeatureExtractor {
@@ -101,4 +101,32 @@ test("local embedder: a failed first download is an actionable error, and a read
   await ok.embed(["x"]);
   assert.ok(statuses.some(m => m.includes("loading local semantic model")), "load announced");
   assert.ok(statuses.some(m => m.includes("model Xenova/test-model ready")), "completion confirmed");
+});
+
+test("local embedder: load status distinguishes a warm cache from the one-time download", async () => {
+  const stub = (dim: number): FeatureExtractor => (texts, opts) =>
+    Promise.resolve({ dims: [texts.length, dim], data: new Float32Array(texts.length * dim) });
+
+  const warm: string[] = [];
+  await new LocalEmbedder("Xenova/test-model", 8, () => Promise.resolve(stub(8)),
+    m => warm.push(m), () => true).embed(["x"]);
+  assert.ok(warm.some(m => m.includes("loading cached local semantic model") && m.includes("runs offline")),
+    "warm cache says so: " + warm.join(" | "));
+  assert.ok(!warm.some(m => m.includes("downloads it once")), "warm cache must not claim a download");
+
+  const cold: string[] = [];
+  await new LocalEmbedder("Xenova/test-model", 8, () => Promise.resolve(stub(8)),
+    m => cold.push(m), () => false).embed(["x"]);
+  assert.ok(cold.some(m => m.includes("loading local semantic model") && m.includes("first use downloads it once")),
+    "cold cache announces the one-time download: " + cold.join(" | "));
+  assert.ok(!cold.some(m => m.includes("loading cached")), "cold cache must not claim a cache hit");
+});
+
+test("defaultModelCacheDir: resolves the transformers.js cache path, null when unresolvable", () => {
+  const dir = defaultModelCacheDir("Xenova/all-MiniLM-L6-v2",
+    () => "/fake/node_modules/@xenova/transformers/package.json");
+  assert.strictEqual(dir, "/fake/node_modules/@xenova/transformers/.cache/Xenova/all-MiniLM-L6-v2",
+    "matches transformers.js env.js: <pkg root>/.cache/<org>/<name>");
+  assert.strictEqual(defaultModelCacheDir("Xenova/x", () => { throw new Error("not installed"); }), null,
+    "unresolvable package yields null, not a guess");
 });

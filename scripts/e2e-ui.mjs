@@ -15,7 +15,8 @@ await fs.writeFile(path.join(dir, "alpha.ts"),
   "export function alphaSearch(input: string): string {\n  return input.trim();\n}\n");
 await fs.writeFile(path.join(dir, "beta.ts"),
   "export function betaHelper(n: number): number {\n  return n * 2;\n}\n");
-const ember = "/home/sandbox/ember";
+// Resolve the repo from this script's location, not a developer-machine path.
+const ember = path.resolve(import.meta.dirname, "..");
 await run("node", [path.join(ember, "dist/cli.js"), "index", "--path", dir]);
 
 const server = (await import(path.join(ember, "dist/ui/server.js"))).createUiServer(dir);

@@ -8,11 +8,30 @@
  * memory-driven batch size (see autoEmbedBatch). The first embed()
  * downloads the model to the transformers.js cache, then runs offline. */
 
+import * as fs from "node:fs";
 import * as os from "node:os";
+import * as path from "node:path";
+import { createRequire } from "node:module";
 import type { Embedder } from "./embedder.js";
 import { normalize } from "./hnsw.js";
 
 export const DEFAULT_LOCAL_EMBED_MODEL = "Xenova/all-MiniLM-L6-v2";
+
+const resolvePkg = (id: string): string => createRequire(import.meta.url).resolve(id);
+
+/** Where transformers.js caches a downloaded model (its env.js sets the
+ * default cache to <package root>/.cache/<org>/<name>). Resolved through
+ * the package's own package.json so the lazy import stays lazy - this
+ * probe never loads the library. Returns null when the package cannot be
+ * resolved; the status line then stays generic rather than guessing. */
+export function defaultModelCacheDir(model: string, resolve: (id: string) => string = resolvePkg): string | null {
+  try {
+    const pkgJson = resolve("@xenova/transformers/package.json");
+    return path.join(path.dirname(pkgJson), ".cache", ...model.split("/"));
+  } catch {
+    return null;
+  }
+}
 
 /** Pipeline factory signature matching transformers.js `pipeline()`;
  * injectable so tests stay hermetic (no model download in the suite). */
@@ -42,6 +61,7 @@ export class LocalEmbedder implements Embedder {
     dim = 384,
     private factory?: PipelineFactory,
     private onStatus?: (msg: string) => void,
+    private cacheProbe?: (model: string) => boolean,
   ) {
     // Kind carries the model (same rule as HttpEmbedder): switching local
     // models forces an honest full rebuild via the indexer comparison.
@@ -69,10 +89,12 @@ export class LocalEmbedder implements Embedder {
     }
     // First-use setup must be visible: the model download can take a while.
     // Node CLIs/servers see this on stderr; injected onStatus can redirect it.
-    // First-use setup must be visible: the model download can take a while.
-    // Node CLIs/servers see this on stderr; injected onStatus can redirect it.
+    // The line distinguishes a warm cache from the one-time download - the
+    // old single message implied a download on every run.
     const status = this.onStatus ?? ((m: string) => console.error(m));
-    status(`loading local semantic model ${this.model} - first use downloads it once, then it runs offline`);
+    status(this.isModelCached()
+      ? `loading cached local semantic model ${this.model} (runs offline)`
+      : `loading local semantic model ${this.model} - first use downloads it once, then it runs offline`);
     try {
       this.extractor = await factory("feature-extraction", this.model, { quantized: true });
     } catch (e) {
@@ -85,6 +107,12 @@ export class LocalEmbedder implements Embedder {
     }
     status(`local semantic model ${this.model} ready`);
     return this.extractor;
+  }
+
+  private isModelCached(): boolean {
+    if (this.cacheProbe) return this.cacheProbe(this.model);
+    const dir = defaultModelCacheDir(this.model);
+    return dir !== null && fs.existsSync(dir);
   }
 
   async embed(texts: string[]): Promise<Float32Array[]> {
