@@ -61,11 +61,13 @@
 
   @media (max-width: 960px) {
     main { grid-template-columns: 1fr; height: auto; }
-    aside { border-right: 0; border-bottom: 1px solid #2e271c; max-height: 220px; }
+    aside { border-right: 0; border-bottom: 1px solid #2e271c; max-height: none; overflow: visible; }
     #preview { border-left: 0; border-top: 1px solid #2e271c; }
     #hdrStats { display: none; }
-    header { flex-wrap: wrap; }
-    #repoUrl { max-width: none; }
+    header { flex-wrap: wrap; row-gap: 8px; }
+    .brand { flex: 1; }
+    /* repo entry gets its own full-width row so it stays usable on a phone */
+    #repoUrl { order: 3; flex: 1 1 100%; max-width: none; }
   }
 </style>
 <script type="importmap">{ "imports": { "@xenova/transformers": "./vendor/transformers.min.js" } }</script>
