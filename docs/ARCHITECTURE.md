@@ -169,9 +169,12 @@ save and prints a one-line "may be stale" note when any drift; the web
 UI status bar and the MCP index_status tool surface the same count.
 mtime is a heuristic: a touch without an edit counts; a rewrite with a
 preserved mtime (cp -p, tar extraction) does not; a deleted file leaves
-nothing to stat; a new file backdated before the index save is invisible
-too. The note can be wrong in both directions; the status command
-remains the hash-accurate check.
+nothing to stat. The hint stats only files the index already knows - a
+brand-new file is not counted (the status command's hash check covers
+those exactly). The note can be wrong in both directions; the status
+command remains the hash-accurate check. The hint stats indexed paths
+directly rather than walking the tree, because a recursive stat walk
+measured ~80-110 ms on 2,102 files - half of query latency.
 
 ## Testing strategy
 

@@ -14,13 +14,6 @@ export interface ScannedFile {
   content: string;
 }
 
-/** Stat-only view of a scanned file (no content read). */
-export interface ScannedFileStat {
-  relPath: string;
-  size: number;
-  mtimeMs: number;
-}
-
 const SKIP_DIRS = new Set([
   "node_modules", ".git", ".hg", ".svn", "dist", "build", "out", "target",
   "vendor", "__pycache__", ".next", ".nuxt", ".cache", "coverage", ".idea",
@@ -56,12 +49,6 @@ async function loadEmberIgnore(root: string): Promise<string[]> {
   } catch { return []; }
 }
 
-/** The same repo walk without reading file contents: for cheap drift
- * checks where reading every file would double query latency. */
-export async function scanRepoStat(root: string): Promise<ScannedFileStat[]> {
-  return (await collect(root, false)).files as ScannedFileStat[];
-}
-
 export interface ScanResult {
   files: ScannedFile[];
   /** True when the walk stopped at the file cap: the index is PARTIAL. */
@@ -70,16 +57,16 @@ export interface ScanResult {
 }
 
 export async function scanRepo(root: string, maxFiles = MAX_TOTAL_FILES): Promise<ScannedFile[]> {
-  return (await collect(root, true, maxFiles)).files as ScannedFile[];
+  return (await collect(root, maxFiles)).files as ScannedFile[];
 }
 
 export async function scanRepoCapped(root: string, maxFiles = MAX_TOTAL_FILES): Promise<ScanResult> {
-  const r = await collect(root, true, maxFiles);
+  const r = await collect(root, maxFiles);
   return { files: r.files as ScannedFile[], capped: r.capped, cap: maxFiles };
 }
 
-async function collect(root: string, readContent: boolean, maxFiles = MAX_TOTAL_FILES): Promise<{ files: (ScannedFile | ScannedFileStat)[]; capped: boolean }> {
-  const out: (ScannedFile | ScannedFileStat)[] = [];
+async function collect(root: string, maxFiles = MAX_TOTAL_FILES): Promise<{ files: ScannedFile[]; capped: boolean }> {
+  const out: ScannedFile[] = [];
   let capped = false;
   const ignored = await loadEmberIgnore(root);
   const isIgnored = (rel: string): boolean =>
@@ -106,11 +93,6 @@ async function collect(root: string, readContent: boolean, maxFiles = MAX_TOTAL_
         try { st = await fs.stat(abs); } catch { continue; }
         if (st.size === 0 || st.size > MAX_FILE_BYTES) continue;
         const relPath = path.relative(root, abs);
-        if (!readContent) {
-          if (isIgnored(relPath)) continue;
-          out.push({ relPath, size: st.size, mtimeMs: st.mtimeMs });
-          continue;
-        }
         let content: string;
         try { content = await fs.readFile(abs, "utf8"); } catch { continue; }
         if (content.indexOf("\0") !== -1) continue; // binary sniff
