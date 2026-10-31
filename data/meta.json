@@ -1,9 +1,12 @@
 {
   "version": 1,
-  "embedderKind": "local-hashing-lexical",
-  "dim": 1024,
-  "chunkCount": 754,
-  "fileCount": 45,
-  "createdAt": "2026-10-28T15:03:14.075Z",
-  "updatedAt": "2026-10-28T15:03:14.075Z"
+  "embedderKind": "local-wasm:Xenova/all-MiniLM-L6-v2",
+  "dim": 384,
+  "chunkCount": 1478,
+  "fileCount": 70,
+  "createdAt": "2026-10-31T13:31:20.620Z",
+  "updatedAt": "2026-10-31T17:40:41.143Z",
+  "indexMode": "flat",
+  "capped": false,
+  "generation": "mvwosxtq-nqonzqhd"
 }
