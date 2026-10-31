@@ -44,9 +44,15 @@ scan -> chunk -> embed -> HNSW -> persist (.ember/)
    crash mid-save cannot leave a half-written file set; a crash between
    the renames is recovered automatically on the next open from the
    backup directory, and notes and the usage log are carried across.
-   Readers straddling a swap are caught by consistency validation and
-   retried (one writer at a time). Reads are hardened against
-   torn/corrupt tails; the notes tail is repaired before append.
+   Writers and recovery are serialized by a lock file (`.ember.lock`);
+   a second writer fails fast, and readers never move or delete backups
+   while a writer holds the lock. Each saved set carries a generation id
+   (`meta.generation` plus a `generation` marker file), so a torn read
+   mixing two sets is detected even when chunk and vector counts happen
+   to match, and is retried once before failing. A lock left by a crashed
+   process is reclaimed when its pid is dead or older than 10 minutes.
+   Reads are hardened against torn/corrupt tails; the notes tail is
+   repaired before append.
 
 ## Retrieval
 
@@ -65,8 +71,10 @@ opt-in. Freezing the corpus at a commit (materialized via `git archive`)
 keeps every before/after comparison on exactly the same tree.
 
 Optional local semantic embeddings (`local-embedder.ts`, `EMBER_LOCAL_EMBED=1`):
-all-MiniLM-L6-v2 via transformers.js in pure WASM - no API, no cost, nothing
-leaves the machine; a deliberately unbundled optional install. Measured on
+all-MiniLM-L6-v2 via transformers.js in pure WASM - no API key, no cost; a
+deliberately unbundled optional install. The one-time model download
+fetches public model files from Hugging Face; after that, no code or
+query leaves the machine for retrieval. Ember itself sends no telemetry. Measured on
 the frozen corpus: paraphrase top-1 2/15 -> 5/15, top-5 4/15 -> 10/15, MRR
 0.167 -> 0.472; with hybrid fusion, verbatim top-1 6/15, MRR 0.499 (the best
 measured configuration). Embedder kind carries the model id, so switching

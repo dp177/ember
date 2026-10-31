@@ -16,10 +16,15 @@
  * Files Ember does not own (notes.jsonl, usage.jsonl, anything future) are
  * carried into the new set before the swap.
  *
- * Concurrency contract (local tool, one writer at a time): a reader running
- * during the swap sees either the old set or the new set; a torn read
- * straddling the swap is detected by consistency validation and retried
- * once. Two concurrent writers are not supported.
+ * Concurrency contract (local tool, one writer at a time): writers
+ * (index saves) and recovery are serialized by a lock file at
+ * <repo>/.ember.lock; a second writer fails fast with a clear error, and
+ * readers never move or delete backup dirs while a writer holds the lock.
+ * Each saved set carries a generation id (meta.generation + generation
+ * file); a torn read that mixes two sets is detected by generation
+ * mismatch or consistency validation and retried once before failing.
+ * A lock left by a crashed process is reclaimed when its pid is dead or
+ * it is older than 10 minutes.
  */
 
 import { promises as fs } from "node:fs";
@@ -38,10 +43,14 @@ export interface IndexMeta {
   fileCount: number;
   createdAt: string;
   updatedAt: string;
+  generation?: string;
 }
 
 export interface FileHash { sha1: string; size: number; }
 export type FileHashMap = Record<string, FileHash>;
+
+const LOCK_STALE_MS = 10 * 60 * 1000;
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 export class EmberStore {
   readonly dir: string;
@@ -54,7 +63,67 @@ export class EmberStore {
     catch { return false; }
   }
 
+  private get lockPath(): string {
+    return path.join(this.repoRoot, ".ember.lock");
+  }
+
+  /** True while another process holds the write lock. */
+  private async writerActive(): Promise<boolean> {
+    try { await fs.access(this.lockPath); return true; } catch { return false; }
+  }
+
+  private async lockIsStale(): Promise<boolean> {
+    try {
+      const raw = JSON.parse(await fs.readFile(this.lockPath, "utf8")) as { pid?: number; at?: number };
+      if (typeof raw.at === "number" && Date.now() - raw.at > LOCK_STALE_MS) return true;
+      if (typeof raw.pid === "number") {
+        try { process.kill(raw.pid, 0); return false; } catch { return true; }
+      }
+      return false;
+    } catch { return true; } // unreadable or malformed lock: treat as stale
+  }
+
+  /** Serialize writers and recovery. Fails fast while another writer holds the lock. */
+  private async withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    let handle: fs.FileHandle | null = null;
+    for (let attempt = 0; attempt < 2 && !handle; attempt++) {
+      try {
+        handle = await fs.open(this.lockPath, "wx");
+        await handle.writeFile(JSON.stringify({ pid: process.pid, at: Date.now() }));
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code === "EEXIST" && attempt === 0 && await this.lockIsStale()) {
+          await fs.rm(this.lockPath, { force: true });
+          continue;
+        }
+        if (code === "EEXIST") {
+          throw new Error("another ember process is writing this index; wait for it to finish and try again");
+        }
+        throw e;
+      }
+    }
+    try {
+      return await fn();
+    } finally {
+      await handle!.close().catch(() => {});
+      await fs.rm(this.lockPath, { force: true });
+    }
+  }
+
+  /** Recovery mutates the repo, so readers only run it while no writer is active. */
+  private async recoverIfNoWriter(): Promise<void> {
+    if (await this.writerActive()) return;
+    try {
+      await this.withWriteLock(() => this.recover());
+    } catch (e) {
+      // A writer grabbed the lock between our check and acquisition: it owns recovery.
+      if (e instanceof Error && e.message.includes("another ember process")) return;
+      throw e;
+    }
+  }
+
   async save(meta: IndexMeta, chunks: ChunkRecord[], vectors: Float32Array[], index: HnswIndex, fileHashes?: FileHashMap): Promise<void> {
+    return this.withWriteLock(async () => {
     const parent = path.dirname(this.dir);
     const tmp = `${this.dir}.tmp-${process.pid}`;
     const backup = `${this.dir}.backup-${process.pid}`;
@@ -70,7 +139,10 @@ export class EmberStore {
     await fs.mkdir(tmp, { recursive: true });
     // Carry over files this save does not own (notes, usage log, ...).
     await fs.cp(this.dir, tmp, { recursive: true }).catch(() => {});
+    const generation = meta.generation ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    meta.generation = generation;
     await fs.writeFile(path.join(tmp, "meta.json"), JSON.stringify(meta, null, 2));
+    await fs.writeFile(path.join(tmp, "generation"), generation + "\n");
     const lines = chunks.map(c => JSON.stringify(c)).join("\n") + "\n";
     await fs.writeFile(path.join(tmp, "chunks.jsonl"), lines);
     const buf = Buffer.alloc(vectors.length * meta.dim * 4);
@@ -87,6 +159,7 @@ export class EmberStore {
       throw e;
     }
     await fs.rm(backup, { recursive: true, force: true });
+    });
   }
 
   /** Recover from a save that crashed mid-swap. If .ember is absent but a
@@ -110,20 +183,26 @@ export class EmberStore {
   }
 
   async load(): Promise<{ meta: IndexMeta; chunks: ChunkRecord[]; index: HnswIndex }> {
-    await this.recover();
+    await this.recoverIfNoWriter();
     try {
       return await this.loadOnce();
-    } catch {
-      // A reader can straddle an in-flight save's swap; recovery + one
-      // retry settles on a consistent set.
-      await this.recover();
+    } catch (first) {
+      // A reader can straddle an in-flight save's swap; wait briefly so the
+      // swap settles, re-run recovery if no writer is active, then retry once.
+      await sleep(50);
+      await this.recoverIfNoWriter();
       return await this.loadOnce();
     }
   }
 
   private async loadOnce(): Promise<{ meta: IndexMeta; chunks: ChunkRecord[]; index: HnswIndex }> {
     try {
+      const genPath = path.join(this.dir, "generation");
+      const genBefore = await fs.readFile(genPath, "utf8").then(s => s.trim(), () => null);
       const meta = JSON.parse(await fs.readFile(path.join(this.dir, "meta.json"), "utf8")) as IndexMeta;
+      if (genBefore !== null && meta.generation !== undefined && meta.generation !== genBefore) {
+        throw new Error(`torn read: meta generation ${meta.generation} but generation file ${genBefore}`);
+      }
       const lines = (await fs.readFile(path.join(this.dir, "chunks.jsonl"), "utf8")).trim().split("\n");
       const chunks = lines.map(l => JSON.parse(l)) as ChunkRecord[];
       const buf = await fs.readFile(path.join(this.dir, "vectors.f32"));
@@ -136,6 +215,11 @@ export class EmberStore {
       }
       const hnswJson = JSON.parse(await fs.readFile(path.join(this.dir, "hnsw.json"), "utf8"));
       const index = HnswIndex.fromJSON(hnswJson, vectors);
+      // Re-check identity: if a swap replaced the set mid-read, start over.
+      const genAfter = await fs.readFile(genPath, "utf8").then(s => s.trim(), () => null);
+      if (genBefore !== null && genAfter !== genBefore) {
+        throw new Error(`torn read: generation changed ${genBefore} -> ${genAfter} during load`);
+      }
       return { meta, chunks, index };
     } catch (e) {
       throw new Error(
@@ -145,7 +229,7 @@ export class EmberStore {
   }
 
   async readMeta(): Promise<IndexMeta | null> {
-    await this.recover();
+    await this.recoverIfNoWriter();
     try { return JSON.parse(await fs.readFile(path.join(this.dir, "meta.json"), "utf8")); }
     catch { return null; }
   }

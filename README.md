@@ -179,8 +179,11 @@ routing, caching and discounts on the provider's side._
   (kind, model or dimension) triggers an automatic full rebuild.
 - **Note recall is keyword matching.** `recall_notes` scores by unique
   query-term overlap — predictable and offline, not semantic.
-- **Local-first.** The index never leaves your machine; network calls happen
-  only when you configure an external endpoint.
+- **Local-first.** Your code and queries stay on your machine. The only
+  network calls are the ones you configure: an external embedding endpoint,
+  an LLM for `ask`, or the one-time public model download from Hugging Face
+  when you first enable local semantic embeddings. Ember itself sends no
+  telemetry anywhere.
 
 ## How it fits together
 
