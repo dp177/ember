@@ -36,10 +36,26 @@ function cite(h: SearchHit): string {
  * applies this floor; it only gates what Ask presents as evidence. */
 export const ASK_MIN_SEMANTIC_SCORE = 0.2;
 
-export function askMinScore(embedderKind: string, env: NodeJS.ProcessEnv = process.env): number {
+export function askMinScore(embedderKind: string, hybrid: boolean, env: NodeJS.ProcessEnv = process.env): number {
   const raw = parseFloat(env.EMBER_ASK_MIN_SCORE ?? "");
   if (Number.isFinite(raw)) return raw;
+  // Hybrid fuses vector + BM25 ranks via RRF: measured scores are ~0.016-0.024
+  // regardless of relevance, so the cosine-scale floor would abstain on
+  // everything, and no separating threshold exists there either (relevant and
+  // off-topic probes overlap at the RRF floor). Lexical hashing scores show
+  // near-total relevant/off-topic overlap (0.17-0.45 vs 0.14-0.39). Both modes
+  // keep the legacy score>0 behavior and Ask says the floor is uncalibrated.
+  if (hybrid) return 0;
   return embedderKind.startsWith("local-wasm:") ? ASK_MIN_SEMANTIC_SCORE : 0;
+}
+
+/** Disclosure appended to Ask output when the relevance floor is not calibrated for the active mode. */
+export function askModeNote(embedderKind: string, hybrid: boolean): string {
+  if (hybrid && embedderKind.startsWith("local-wasm:"))
+    return " (hybrid mode: relevance floor uncalibrated - scores are RRF-fused on a different scale)";
+  if (!embedderKind.startsWith("local-wasm:"))
+    return " (lexical diagnostic mode: no relevance floor calibrated for this scorer - off-topic and relevant scores overlap)";
+  return "";
 }
 
 /** Remove [n] citation markers that point outside the retrieved chunk list.
@@ -84,7 +100,8 @@ export async function answerQuestion(
   if (hits.length === 0) {
     return { text: "No relevant code found. Is the repo indexed? Run: ember index", hits, synthesized: false };
   }
-  const minScore = askMinScore(engine.embedderKind);
+  const minScore = askMinScore(engine.embedderKind, engine.hybrid);
+  const modeNote = askModeNote(engine.embedderKind, engine.hybrid);
   const passing = hits.filter(h => h.score > minScore);
 
   const envCap = typeof process !== "undefined" ? parseInt(process.env.EMBER_MAX_OUTPUT_TOKENS ?? "", 10) : NaN;
@@ -100,13 +117,14 @@ export async function answerQuestion(
       const { answer, stripped } = validateCitations(result.content, hits.length);
       const notes: string[] = [];
       if (stripped > 0) notes.push(`(stripped ${stripped} citation marker(s) pointing outside the retrieved chunks)`);
+      if (modeNote) notes.push(modeNote.trim());
       if (!/\[\d+\]/.test(answer)) notes.push("(the model answer contains no citation markers - treat it as unverified and check the sources below)");
       const suffix = notes.length ? `\n${notes.join("\n")}` : "";
       return { text: `${answer}${suffix}\n\nSources:\n${hits.map((h, i) => `[${i + 1}] ${cite(h)}`).join("\n")}`, hits, synthesized: true };
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
       return { text: extractiveAnswer(hits, question,
-        `Chat synthesis FAILED (${why}). Retrieval only - no model-generated claims below.`, minScore), hits, synthesized: false };
+        `Chat synthesis FAILED (${why}). Retrieval only - no model-generated claims below.${modeNote}`, minScore), hits, synthesized: false };
     }
   }
 
@@ -114,8 +132,8 @@ export async function answerQuestion(
     // Synthesis skipped: no retrieved chunk cleared the score floor, so there
     // is no grounded context to send. Say so instead of buying a guess.
     return { text: extractiveAnswer(hits, question,
-      "No grounded sources - chat synthesis skipped (nothing retrieved scored above the relevance floor; no request was sent to the model).", minScore), hits, synthesized: false };
+      "No grounded sources - chat synthesis skipped (nothing retrieved scored above the relevance floor; no request was sent to the model)." + modeNote, minScore), hits, synthesized: false };
   }
   return { text: extractiveAnswer(hits, question,
-    "Retrieval only (no chat model configured; set EMBER_API_BASE/EMBER_API_KEY/EMBER_CHAT_MODEL for synthesized answers).", minScore), hits, synthesized: false };
+    "Retrieval only (no chat model configured; set EMBER_API_BASE/EMBER_API_KEY/EMBER_CHAT_MODEL for synthesized answers)." + modeNote, minScore), hits, synthesized: false };
 }

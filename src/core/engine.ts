@@ -74,6 +74,7 @@ export class EmberEngine {
     return this.embedder.kind;
   }
 
+
   /** Exact scan over all chunk vectors. Default retrieval structure: at the
    * sizes Ember targets this costs single-digit to low-hundreds of ms per
    * query (measured here: 7ms at 814 chunks, dim 1024) and removes the

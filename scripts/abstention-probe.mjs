@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { EmberEngine } from "../dist/core/engine.js";
 import { localEmbedderFromEnv } from "../dist/core/local-embedder.js";
+import { HashingEmbedder } from "../dist/core/embedder.js";
 import { indexRepo } from "../dist/core/indexer.js";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -38,14 +39,15 @@ const OFFTOPIC = [
   "what is compound interest",
 ];
 
-const embedder = localEmbedderFromEnv({ ...process.env, EMBER_LOCAL_EMBED: "1" });
+const mode = process.env.EMBER_PROBE_MODE ?? "semantic";
+const embedder = mode === "lexical" ? new HashingEmbedder() : localEmbedderFromEnv({ ...process.env, EMBER_LOCAL_EMBED: "1" });
 const corpus = await mkdtemp(path.join(os.tmpdir(), "ember-probe-"));
 execFileSync("git", ["archive", ref, "-o", path.join(corpus, "tree.tar")], { cwd: corpusRepo });
 execFileSync("tar", ["-xf", "tree.tar"], { cwd: corpus });
 await rm(path.join(corpus, "tree.tar"));
 console.error("indexing", corpusRepo, "at", ref.slice(0, 7));
 await indexRepo(corpus, embedder);
-const engine = await EmberEngine.load(corpus, embedder, { hybrid: false });
+const engine = await EmberEngine.load(corpus, embedder, { hybrid: mode === "hybrid" });
 
 async function probe(q) {
   const hits = await engine.search(q, 5);
@@ -67,7 +69,7 @@ for (const q of OFFTOPIC) offtopic.push({ q, ...(await probe(q)) });
 const relTops = relevant.map(r => r.top).sort((a, b) => a - b);
 const offTops = offtopic.map(r => r.top).sort((a, b) => a - b);
 const summary = {
-  corpus: ref, embedder: embedder.kind,
+  corpus: ref, embedder: embedder.kind, mode,
   relevant: { n: relTops.length, min: relTops[0], median: relTops[Math.floor(relTops.length / 2)], max: relTops[relTops.length - 1] },
   offtopic: { n: offTops.length, min: offTops[0], median: offTops[Math.floor(offTops.length / 2)], max: offTops[offTops.length - 1] },
 };
