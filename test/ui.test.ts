@@ -33,6 +33,15 @@ test("ui workflow: status -> search with real excerpts -> expand context -> ask 
     const status = await (await fetch(`${base}/api/status`)).json() as any;
     assert.equal(status.indexed, true);
     assert.equal(status.hybrid, false);
+    assert.equal(status.modifiedSinceIndex, 0, "clean tree right after indexing");
+
+    // mtime-drift hint reaches the status API (heuristic, see core/freshness).
+    const future = new Date(Date.now() + 3600_000);
+    await fs.utimes(path.join(dir, "alpha.ts"), future, future);
+    const staleStatus = await (await fetch(`${base}/api/status`)).json() as any;
+    assert.equal(staleStatus.modifiedSinceIndex, 1, "touched file reported");
+    const now = new Date();
+    await fs.utimes(path.join(dir, "alpha.ts"), now, now);
 
     // .emberignore keeps the fixture out of the corpus entirely.
     const ignored = await (await fetch(`${base}/api/search?q=xyzzy-fixture`)).json() as any;

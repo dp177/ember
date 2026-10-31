@@ -71,6 +71,7 @@ async function status() {
     const s = await api("/api/status");
     $("#status").innerHTML = s.indexed
       ? s.chunks + " chunks / " + s.files + " files &middot; " + esc(s.embedder) + " &middot; updated " + new Date(s.updatedAt).toLocaleString() + (s.hybrid ? " &middot; hybrid (experimental)" : "")
+        + (s.modifiedSinceIndex > 0 ? ' &middot; <span class="err">' + s.modifiedSinceIndex + " file(s) modified since indexing - results may be stale; reindex to refresh</span>" : "")
       : 'not indexed yet - run <code>ember index</code> or POST /api/index';
   } catch (e) { $("#status").innerHTML = '<span class="err">' + esc(e.message) + "</span>"; }
 }

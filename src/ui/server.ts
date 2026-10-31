@@ -11,6 +11,7 @@ import { embedderFromEnv } from "../core/embedder.js";
 import { EmberEngine } from "../core/engine.js";
 import { indexRepo } from "../core/indexer.js";
 import { EmberStore } from "../core/store.js";
+import { mtimeDrift } from "../core/freshness.js";
 import { NoteStore } from "../core/notes.js";
 import { buildRepoMap, formatRepoMap } from "../core/repomap.js";
 import { answerQuestion } from "../core/ask.js";
@@ -73,8 +74,11 @@ export function createUiServer(root: string, opts: UiOptions = {}): http.Server 
 
       if (route === "/api/status") {
         const meta = await new EmberStore(root).readMeta();
+        // Cheap mtime heuristic (see core/freshness.ts): can be wrong in
+        // both directions, so the UI phrases it as "may be stale".
+        const drift = meta ? await mtimeDrift(new EmberStore(root), root).catch(() => null) : null;
         json(res, 200, meta
-          ? { indexed: true, chunks: meta.chunkCount, files: meta.fileCount, embedder: meta.embedderKind, dim: meta.dim, updatedAt: meta.updatedAt, hybrid: opts.hybrid ?? false }
+          ? { indexed: true, chunks: meta.chunkCount, files: meta.fileCount, embedder: meta.embedderKind, dim: meta.dim, updatedAt: meta.updatedAt, hybrid: opts.hybrid ?? false, modifiedSinceIndex: drift }
           : { indexed: false });
         return;
       }
